@@ -1,0 +1,18 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=my zed
+GenericName=Text Editor
+Comment=A lightweight personal build of Zed.
+TryExec=my-zed
+StartupNotify=true
+StartupWMClass=dev.myzed.MyZed-Dev
+Exec=my-zed %U
+Icon=my-zed
+Categories=Utility;TextEditor;Development;IDE;
+Keywords=zed;myzed;
+Actions=NewWorkspace;
+
+[Desktop Action NewWorkspace]
+Exec=my-zed --new %U
+Name=Open a new workspace

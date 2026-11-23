@@ -1,0 +1,102 @@
+> [!IMPORTANT]
+> Remove this line to confirm you've reviewed this PR before submitting.
+
+# my zed
+
+> [!WARNING]
+> **Personal project.** This is my personal, opinionated fork of
+> [Zed](https://github.com/zed-industries/zed). It is not affiliated with or
+> endorsed by Zed Industries. It is published as-is, without support,
+> guarantees or a stable API, and it may change or be abandoned at any time.
+> Use upstream Zed if you want a supported editor.
+
+A lightweight, self-contained build of Zed focused on aggressive token saving
+for agent requests, no telemetry, no mandatory cloud account, and comfortable
+long-running chats. It installs alongside an existing Zed and never
+self-updates to upstream.
+
+## Features
+
+- **Token savings.** Configurable per-request context trimming on top of
+  auto-compaction: tool-output caps, old-turn truncation, ANSI stripping,
+  de-duplication, image dropping, and reasoning stripping with a separate
+  "very old" threshold.
+- **No tracking.** Telemetry, metrics and auto-update are disabled; sign-in is
+  hidden and the build cannot replace itself with upstream Zed.
+- **Long-running chats.** Age/count based chat maintenance, message queue that
+  survives restarts, per-chat Auto mode, and a token usage statistics window.
+- **Lower memory use (opt-in).** Two independent, off-by-default knobs:
+  `resources.trim_interval_secs` asks the allocator to return free heap pages
+  to the OS periodically, and the `mimalloc` cargo feature swaps in Microsoft's
+  mimalloc allocator. Defaults are unchanged.
+- **Resource monitoring.** CPU and memory readout in the status bar.
+
+See [CHANGELOG.md](./CHANGELOG.md) for the full list of differences from
+upstream Zed.
+
+## Installation
+
+Only the **three most recent** releases are kept on GitHub; older releases and
+their tags are removed automatically. Download the installer for your platform
+from the [Releases](../../releases) page:
+
+- **Windows** — `ZedEditorUserSetup-x64-*.exe`
+- **Linux** — `zed-linux-*.tar.gz` (extract and run `bin/zed`)
+
+Expect the app to be called `my zed` and installed next to Zed. Existing Zed
+settings, themes, keymaps and providers are picked up automatically; working
+data (databases, logs, caches) is kept in a separate directory so the two can
+run side by side.
+
+## Memory
+
+The default build uses the system allocator (glibc `malloc` on Linux) and is
+unchanged from before. Two independent, off-by-default levers are available:
+
+- **Periodic heap trim.** Set `resources.trim_interval_secs` to a non-zero value
+  (for example `60`). Every interval the app asks the allocator to return free
+  pages to the OS (`malloc_trim(0)` with glibc, `mi_collect(true)` with
+  mimalloc). The value is re-read each cycle, so it can be toggled without a
+  restart. `0` (the default) disables it.
+- **mimalloc allocator.** Build with `--features mimalloc` to use Microsoft's
+  mimalloc as the global allocator. It returns freed pages more eagerly than
+  glibc, which helps long-running sessions, but it is not the default: measured
+  on this fork it used more resident memory than glibc unless also tuned:
+
+  | Allocator | Idle RSS (fresh instance) |
+  | --- | --- |
+  | glibc (default) | ~262 MB |
+  | mimalloc (stock) | ~427 MB |
+  | mimalloc + `MIMALLOC_ARENA_EAGER_COMMIT=0 MIMALLOC_PURGE_DELAY=0` | ~279 MB |
+
+  If you enable it, also set those two environment variables (for example in the
+  launcher) to avoid the idle regression. Add `MIMALLOC_SHOW_STATS=1` to print
+  allocator statistics on exit.
+
+## Building from source
+
+Rust and the platform toolchain are required.
+
+```sh
+# Linux
+./script/linux          # installs system dependencies
+cargo build --profile release-lite -p zed
+
+# Windows (PowerShell): install the Visual Studio C++ build tools, LLVM and
+# Inno Setup, then:
+cargo build --profile release-lite -p zed
+```
+
+To reproduce a release artifact locally:
+
+```sh
+./script/bundle-linux                     # Linux tarball
+./script/bundle-windows.ps1 -Architecture x86_64   # Windows installer
+```
+
+## Licensing
+
+Zed's source code is licensed primarily under GPL-3.0-or-later, with
+Apache-2.0 components where marked. This fork keeps the same licensing.
+See [LICENSE-GPL](./LICENSE-GPL), [LICENSE-APACHE](./LICENSE-APACHE) and
+upstream's [licensing notes](https://github.com/zed-industries/zed#licensing).

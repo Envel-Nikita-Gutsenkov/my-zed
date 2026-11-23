@@ -1,0 +1,80 @@
+name: Build Windows Installer
+
+# Manual-only: this workflow is intentionally not triggered on push or PR.
+# Enable it from the Actions tab ("Run workflow") once the repository is public
+# and Actions are turned on.
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "Release channel baked into the binary"
+        required: false
+        default: "dev"
+        type: choice
+        options:
+          - dev
+          - preview
+          - stable
+
+concurrency:
+  group: build-windows-installer-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build installer (x86_64)
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    env:
+      ZED_WORKSPACE: ${{ github.workspace }}
+      ZED_RELEASE_CHANNEL: ${{ inputs.channel }}
+      # Inno Setup needs a numeric version; the workspace version is 1.31.0.
+      RELEASE_VERSION: "1.31.0"
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Install LLVM (libclang) and Inno Setup
+        shell: pwsh
+        run: |
+          choco install llvm innosetup --no-progress -y
+          $llvm = (Get-ChildItem "C:\Program Files\LLVM\bin\libclang.dll" -ErrorAction SilentlyContinue)
+          if ($llvm) {
+            "LIBCLANG_PATH=C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          }
+
+      - name: Verify native toolchain
+        shell: pwsh
+        run: |
+          cmake --version
+          rustc --version
+          cargo --version
+
+      - name: Build Zed and create installer
+        shell: pwsh
+        run: ./script/bundle-windows.ps1 -Architecture x86_64
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: Zed-Windows-x86_64-installer
+          path: |
+            target/Zed-x86_64.exe
+            target/Zed-x86_64.msi
+          if-no-files-found: error
+          retention-days: 14

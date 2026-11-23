@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+
+jobs:
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      # The system packages that `script/linux` installs. Keep this list in sync
+      # with that script; it keys the apt cache so packages are only downloaded
+      # on a cache miss while `script/linux` stays the source of truth.
+      APT_PACKAGES: >-
+        gcc g++ libasound2-dev libfontconfig-dev libgit2-dev libglib2.0-dev
+        libssl-dev libva-dev libvulkan1 libwayland-dev libx11-xcb-dev
+        libxkbcommon-x11-dev libzstd-dev make cmake clang lld llvm jq git curl
+        gettext-base elfutils libsqlite3-dev musl-tools musl-dev build-essential
+        libstdc++-14-dev pipewire xdg-desktop-portal
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache apt packages
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: ${{ env.APT_PACKAGES }}
+          version: 1.0
+
+      - name: Install system dependencies
+        run: ./script/linux
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-linux
+          cache-on-failure: true
+
+      - name: Check the editor compiles
+        run: cargo check -p zed
+
+      - name: Run unit tests
+        run: >-
+          cargo test
+          -p agent
+          -p agent_settings
+          -p settings_content
+          --lib

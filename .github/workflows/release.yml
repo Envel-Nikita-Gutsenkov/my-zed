@@ -1,0 +1,232 @@
+name: Release
+
+# Builds installers for Linux and Windows and publishes them as a GitHub
+# Release. Only the three most recent releases are kept; older ones (and their
+# tags) are pruned automatically after each publish.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (tag will be v<version>)"
+        required: true
+        default: "1.31.0"
+      channel:
+        description: "Release channel baked into the binary"
+        required: false
+        default: "dev"
+        type: choice
+        options:
+          - dev
+          - preview
+          - stable
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_NET_RETRY: "10"
+  # Release profile overrides keep hosted runners from spending hours on thin
+  # LTO with a single codegen unit. Overridable via env, so the bundle scripts
+  # (which force `--release`) still benefit.
+  CARGO_PROFILE_RELEASE_LTO: "false"
+  CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+  CARGO_PROFILE_RELEASE_DEBUG: "false"
+
+jobs:
+  prepare:
+    name: Prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      channel: ${{ steps.version.outputs.channel }}
+    steps:
+      - name: Resolve version and channel
+        id: version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            version="${GITHUB_REF_NAME#v}"
+            channel="dev"
+          else
+            version="${{ inputs.version }}"
+            channel="${{ inputs.channel }}"
+          fi
+          if [[ -z "$version" ]]; then
+            echo "Version could not be resolved" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "channel=${channel:-dev}" >> "$GITHUB_OUTPUT"
+          echo "Releasing $version on channel ${channel:-dev}"
+
+  linux:
+    name: Build Linux (${{ matrix.arch }})
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            arch: x86_64
+    env:
+      ZED_RELEASE_CHANNEL: ${{ needs.prepare.outputs.channel }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache apt packages
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: >-
+            gcc g++ build-essential make cmake clang lld llvm
+            libasound2-dev libfontconfig-dev libgit2-dev libglib2.0-dev
+            libssl-dev libva-dev libvulkan1 libwayland-dev libx11-xcb-dev
+            libxkbcommon-x11-dev libzstd-dev libsqlite3-dev
+            musl-tools musl-dev jq gettext-base elfutils
+          version: 1.0
+
+      - name: Install Linux dependencies
+        run: ./script/linux
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-linux-${{ matrix.arch }}
+          cache-on-failure: true
+
+      - name: Set release channel
+        shell: bash
+        run: printf '%s' "$ZED_RELEASE_CHANNEL" > crates/zed/RELEASE_CHANNEL
+
+      - name: Bundle Linux
+        run: ./script/bundle-linux --skip-sentry
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}
+          path: |
+            target/release/zed-linux-${{ matrix.arch }}.tar.gz
+            target/zed-remote-server-linux-${{ matrix.arch }}.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  windows:
+    name: Build Windows (x86_64)
+    needs: prepare
+    runs-on: windows-2022
+    timeout-minutes: 300
+    env:
+      ZED_RELEASE_CHANNEL: ${{ needs.prepare.outputs.channel }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-windows-x86_64
+          cache-on-failure: true
+
+      - name: Set release channel
+        shell: pwsh
+        run: |
+          Set-Content -Path crates/zed/RELEASE_CHANNEL -Value "$env:ZED_RELEASE_CHANNEL" -NoNewline
+
+      - name: Bundle Windows
+        shell: pwsh
+        run: ./script/bundle-windows.ps1 -Architecture x86_64
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x86_64
+          path: target/Zed-x86_64.exe
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish release
+    needs: [prepare, linux, windows]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Collect installer assets
+        shell: bash
+        run: |
+          mkdir -p release-assets
+          find dist -type f \( -name '*.tar.gz' -o -name '*.gz' -o -name '*.exe' \) \
+            -exec cp -v {} release-assets/ \;
+          ls -la release-assets
+
+      - name: Extract changelog section
+        shell: bash
+        run: |
+          section=$(awk -v v="$VERSION" '
+            /^## / {
+              if (found) exit
+              heading = $0
+              sub(/^##[[:space:]]+/, "", heading)
+              gsub(/[\[\]]/, "", heading)
+              if (heading == v) { found = 1; next }
+            }
+            found { print }
+          ' CHANGELOG.md)
+          if [[ -z "$section" ]]; then
+            section="Release $VERSION"
+          fi
+          printf '%s\n' "$section" > release-body.md
+          cat release-body.md
+
+      - name: Create release
+        shell: bash
+        run: |
+          tag="v$VERSION"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" release-assets/* --clobber
+          else
+            gh release create "$tag" release-assets/* \
+              --title "$tag" \
+              --notes-file release-body.md
+          fi
+
+      - name: Prune old releases (keep latest 3)
+        shell: bash
+        run: |
+          gh release list --limit 200 --json tagName,createdAt \
+            --jq 'sort_by(.createdAt) | reverse | .[3:] | .[].tagName' |
+          while read -r tag; do
+            [[ -z "$tag" ]] && continue
+            echo "Deleting old release $tag"
+            gh release delete "$tag" --yes --cleanup-tag || true
+          done
