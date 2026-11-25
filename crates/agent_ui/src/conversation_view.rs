@@ -721,7 +721,9 @@ fn nudge_auto_continue(
             AgentThreadEntry::AssistantMessage(message) => Some(message.to_markdown(cx)),
             _ => None,
         })
-        .is_some_and(|text| text.contains("ALL DONE"));
+        .is_some_and(|text| {
+            text.contains("ALL DONE") || text.contains(agent::AUTO_CONTINUE_BLOCKED_MARKER)
+        });
     if is_done {
         return;
     }

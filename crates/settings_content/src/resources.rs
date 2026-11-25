@@ -32,15 +32,14 @@ pub struct ResourcesSettingsContent {
     /// Default: 0
     pub log_file_size_limit_mb: Option<u64>,
     /// Seconds between background attempts to return unused heap pages to the
-    /// operating system. `0` disables the periodic trim, which is the default.
+    /// operating system. `0` disables the periodic trim.
     ///
-    /// With the bundled mimalloc allocator this calls `mi_collect`, which frees
-    /// pages that mimalloc has retained; when mimalloc is disabled on Linux it
-    /// falls back to glibc's `malloc_trim`. Reduces resident memory after the
-    /// editor has handled bursts of large allocations, at the cost of a small
-    /// amount of background work.
+    /// On the default glibc allocator this calls `malloc_trim`; with the opt-in
+    /// `mimalloc` feature it calls `mi_collect` instead. Reduces resident memory
+    /// after the editor has handled bursts of large allocations, at the cost of
+    /// a small amount of background work.
     ///
-    /// Default: 0
+    /// Default: 60
     pub trim_interval_secs: Option<u64>,
 }
 
@@ -66,6 +65,6 @@ impl ResourcesSettingsContent {
     }
 
     pub fn trim_interval_secs(&self) -> u64 {
-        self.trim_interval_secs.unwrap_or(0)
+        self.trim_interval_secs.unwrap_or(60)
     }
 }

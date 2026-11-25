@@ -91,8 +91,13 @@ const EPHEMERAL_TOOL_OUTPUT_OMITTED_MARKER: &str =
     "[short-lived tool output omitted to save tokens]";
 const DUPLICATE_READ_MARKER: &str =
     "[superseded by a newer read of the same file, omitted to save tokens]";
+/// Marker the agent writes, instead of `ALL DONE`, when auto-continue is on but
+/// it genuinely cannot proceed at all (missing access, credentials, or a
+/// decision only the user can make). Auto-continue stops nudging once this
+/// appears, treating it as an emergency stop rather than routine confirmation.
+pub const AUTO_CONTINUE_BLOCKED_MARKER: &str = "AUTO-BLOCKED";
 /// Sent to nudge the agent forward when it stops before writing `ALL DONE`.
-pub const AUTO_CONTINUE_NUDGE: &str = "Auto-continue mode is on. Do not stop to wait for the user after a single step: keep working autonomously toward fully completing the task, including follow-up verification and cleanup. Only once the task is completely finished, end your final message with a line containing exactly `ALL DONE`. If you are blocked and need the user, explain what you need instead of writing `ALL DONE`.";
+pub const AUTO_CONTINUE_NUDGE: &str = "Auto-continue mode is on. You make the decisions yourself: do not stop to ask the user questions, request confirmation, or present options and wait for a reply. When something is ambiguous, pick the most reasonable interpretation, state your assumption in one line, and keep going. Do not call tools that ask the user for input. Only as a last resort, if something truly prevents you from continuing at all (missing access, credentials, or a decision only the user can make), end your final message with a line containing exactly `AUTO-BLOCKED` and briefly explain what you need. Do not use `AUTO-BLOCKED` merely to confirm a routine or reversible step. Keep working autonomously toward fully completing the task, including follow-up verification and cleanup. Only once the task is completely finished, end your final message with a line containing exactly `ALL DONE`.";
 
 /// Resolves the configured request-history limits.
 pub fn request_history_settings(cx: &App) -> RequestHistorySettings {
@@ -1892,6 +1897,11 @@ pub(crate) struct StreamingSaveKey {
     sandbox_grants: crate::db::DbSandboxGrants,
 }
 
+/// The id of the context server that provides browser tools. When the
+/// per-thread browser toggle is on, this server's tools are exposed to the
+/// model; otherwise they are withheld regardless of the active profile.
+pub const BROWSER_CONTEXT_SERVER_ID: &str = "browser";
+
 pub struct Thread {
     id: acp_v2::SessionId,
     prompt_id: PromptId,
@@ -1960,6 +1970,10 @@ pub struct Thread {
     /// already-granted permissions skip the approval prompt.
     /// Never persisted — lives and dies with this thread.
     sandbox_grants: Rc<RefCell<ThreadSandboxGrants>>,
+    /// Whether the agent may use the browser tools in this chat. Toggled
+    /// per-thread by the globe button and never persisted, so new threads start
+    /// with browser access off.
+    browser_enabled: bool,
 }
 
 impl Thread {
@@ -2107,6 +2121,7 @@ impl Thread {
             inherits_parent_model_settings: true,
             sandboxed_terminal_temp_dir: None,
             sandbox_grants: Rc::new(RefCell::new(ThreadSandboxGrants::default())),
+            browser_enabled: false,
         }
     }
 
@@ -2123,6 +2138,24 @@ impl Thread {
         self.profile_id = parent.profile_id.clone();
         self.profile_downgraded_for_restricted_workspace =
             parent.profile_downgraded_for_restricted_workspace;
+        self.browser_enabled = parent.browser_enabled;
+    }
+
+    /// Whether the agent may use browser tools in this chat.
+    pub fn browser_enabled(&self) -> bool {
+        self.browser_enabled
+    }
+
+    /// Grants or revokes browser access for this chat. This is the sole
+    /// authority over the browser server's tools, so toggling it takes effect
+    /// immediately without editing the agent profile.
+    pub fn set_browser_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.browser_enabled == enabled {
+            return;
+        }
+        self.browser_enabled = enabled;
+        self.refresh_turn_tools(cx);
+        cx.notify();
     }
 
     fn apply_model_selection(
@@ -2488,6 +2521,9 @@ impl Thread {
             sandbox_grants: Rc::new(RefCell::new(ThreadSandboxGrants::from_db(
                 &db_thread.sandbox_grants,
             ))),
+            // Not persisted; browser access always starts off when a thread is
+            // reloaded or reopened.
+            browser_enabled: false,
         }
     }
 
@@ -5132,8 +5168,18 @@ impl Thread {
         let mut seen_tools = tools.keys().cloned().collect::<HashSet<_>>();
         let mut duplicate_tool_names = HashSet::default();
         for (server_id, server_tools) in self.context_server_registry.read(cx).servers() {
+            // The per-thread globe toggle is the single authority over the
+            // browser server's tools: enabling it in a chat grants access
+            // without editing the profile, and disabling it withholds them
+            // again. All other servers keep following the profile.
+            let is_browser_server = server_id.0.as_ref() == BROWSER_CONTEXT_SERVER_ID;
             for (tool_name, tool) in server_tools {
-                if profile.is_context_server_tool_enabled(&server_id.0, &tool_name) {
+                let enabled = if is_browser_server {
+                    self.browser_enabled
+                } else {
+                    profile.is_context_server_tool_enabled(&server_id.0, &tool_name)
+                };
+                if enabled {
                     let tool_name: SharedString =
                         provider_compatible_tool_name(tool_name.as_ref()).into();
                     if !seen_tools.insert(tool_name.clone()) {

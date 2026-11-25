@@ -1,6 +1,7 @@
 // Disable command line from opening on release mode
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod migrate_from_zed;
 mod reliability;
 mod watcher_debug;
 mod zed;
@@ -206,8 +207,36 @@ fn fail_to_open_window(e: anyhow::Error, _cx: &mut App) {
 }
 static STARTUP_TIME: OnceLock<Instant> = OnceLock::new();
 
+/// Large transient buffers (decoded images, markdown/rope rendering scratch
+/// space, snapshot diffs) are otherwise carved out of the heap and stay
+/// resident long after they are freed. Routing allocations above the threshold
+/// through `mmap` makes the kernel reclaim them as soon as they are dropped, and
+/// a low trim threshold returns the top of the heap to the OS eagerly. Together
+/// these keep the resident set close to the live working set across long
+/// sessions instead of ratcheting upward with every peak.
+///
+/// Must run before threads start allocating, ideally before any allocation.
+#[cfg(all(not(feature = "mimalloc"), target_os = "linux", target_env = "gnu"))]
+fn tune_system_allocator() {
+    const MMAP_THRESHOLD_BYTES: libc::c_int = 1024 * 1024;
+    const TRIM_THRESHOLD_BYTES: libc::c_int = 1024 * 1024;
+
+    // SAFETY: `mallopt` only changes glibc malloc tunables and is safe to call
+    // before the allocator is used. Setting `M_MMAP_THRESHOLD` explicitly also
+    // pins it, disabling glibc's dynamic threshold bumping that otherwise lets
+    // freed multi-megabyte blocks linger in the heap.
+    unsafe {
+        libc::mallopt(libc::M_MMAP_THRESHOLD, MMAP_THRESHOLD_BYTES);
+        libc::mallopt(libc::M_TRIM_THRESHOLD, TRIM_THRESHOLD_BYTES);
+    }
+}
+
+#[cfg(not(all(not(feature = "mimalloc"), target_os = "linux", target_env = "gnu")))]
+fn tune_system_allocator() {}
+
 fn main() {
     STARTUP_TIME.get_or_init(|| Instant::now());
+    tune_system_allocator();
 
     // If this process was re-executed as a Linux sandbox helper, run that mode
     // without returning. Must run before argument parsing: the wrapped command's
@@ -352,6 +381,8 @@ fn main() {
     let app = build_application()
         .with_assets(Assets)
         .with_restart_arguments(restart_arguments);
+
+    migrate_from_zed::run_pending_import();
 
     let app_db = db::AppDatabase::new();
     let system_id = app.background_executor().spawn(system_id());

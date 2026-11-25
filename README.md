@@ -25,10 +25,10 @@ self-updates to upstream.
   hidden and the build cannot replace itself with upstream Zed.
 - **Long-running chats.** Age/count based chat maintenance, message queue that
   survives restarts, per-chat Auto mode, and a token usage statistics window.
-- **Lower memory use (opt-in).** Two independent, off-by-default knobs:
-  `resources.trim_interval_secs` asks the allocator to return free heap pages
-  to the OS periodically, and the `mimalloc` cargo feature swaps in Microsoft's
-  mimalloc allocator. Defaults are unchanged.
+- **Lower memory use.** Allocator tuning and periodic heap trimming are on by
+  default so freed pages return to the OS instead of making the process only ever
+  grow; the `mimalloc` cargo feature remains available as an opt-in allocator.
+  See [Memory](#memory).
 - **Resource monitoring.** CPU and memory readout in the status bar.
 
 See [CHANGELOG.md](./CHANGELOG.md) for the full list of differences from
@@ -50,28 +50,40 @@ run side by side.
 
 ## Memory
 
-The default build uses the system allocator (glibc `malloc` on Linux) and is
-unchanged from before. Two independent, off-by-default levers are available:
+The default build uses the system allocator (glibc `malloc` on Linux) with two
+memory-oriented tweaks that are on by default:
 
-- **Periodic heap trim.** Set `resources.trim_interval_secs` to a non-zero value
-  (for example `60`). Every interval the app asks the allocator to return free
-  pages to the OS (`malloc_trim(0)` with glibc, `mi_collect(true)` with
-  mimalloc). The value is re-read each cycle, so it can be toggled without a
-  restart. `0` (the default) disables it.
-- **mimalloc allocator.** Build with `--features mimalloc` to use Microsoft's
-  mimalloc as the global allocator. It returns freed pages more eagerly than
-  glibc, which helps long-running sessions, but it is not the default: measured
-  on this fork it used more resident memory than glibc unless also tuned:
+- **Allocator tuning (Linux/glibc).** At startup the app raises glibc's
+  `M_MMAP_THRESHOLD`/`M_TRIM_THRESHOLD` handling so that large transient buffers
+  (decoded images, rendering scratch space, diffs) are served by `mmap` and
+  handed back to the kernel as soon as they are freed instead of inflating the
+  heap. Without this, resident memory ratchets up with every peak and never comes
+  back down, which looks like a leak even when nothing is retained. Set
+  `MALLOC_ARENA_MAX` yourself if you want to trade allocator parallelism for a
+  smaller footprint.
+- **Periodic heap trim.** `resources.trim_interval_secs` defaults to `60`.
+  Every interval the app asks the allocator to return free pages to the OS
+  (`malloc_trim(0)` with glibc, `mi_collect(true)` with mimalloc). The value is
+  re-read each cycle, so it can be changed without a restart, and `0` disables it.
 
-  | Allocator | Idle RSS (fresh instance) |
-  | --- | --- |
-  | glibc (default) | ~262 MB |
-  | mimalloc (stock) | ~427 MB |
-  | mimalloc + `MIMALLOC_ARENA_EAGER_COMMIT=0 MIMALLOC_PURGE_DELAY=0` | ~279 MB |
+The remembered memory log line (`memory usage: resident ... MiB`) now also
+reports how the glibc heap splits into live allocations, free-but-retained
+space, and `mmap`, so it is possible to tell real growth from fragmentation.
 
-  If you enable it, also set those two environment variables (for example in the
-  launcher) to avoid the idle regression. Add `MIMALLOC_SHOW_STATS=1` to print
-  allocator statistics on exit.
+An alternative allocator is still available: build with `--features mimalloc` to
+use Microsoft's mimalloc. It returns freed pages more eagerly than glibc, which
+helps long-running sessions, but it is not the default: measured on this fork it
+used more resident memory than glibc unless also tuned:
+
+| Allocator | Idle RSS (fresh instance) |
+| --- | --- |
+| glibc (default) | ~262 MB |
+| mimalloc (stock) | ~427 MB |
+| mimalloc + `MIMALLOC_ARENA_EAGER_COMMIT=0 MIMALLOC_PURGE_DELAY=0` | ~279 MB |
+
+If you enable it, also set those two environment variables (for example in the
+launcher) to avoid the idle regression. Add `MIMALLOC_SHOW_STATS=1` to print
+allocator statistics on exit.
 
 ## Building from source
 

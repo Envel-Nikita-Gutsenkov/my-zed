@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use gpui::{App, Context, IntoElement, ParentElement, Render, Subscription, Task, Window, div, px};
@@ -40,12 +41,19 @@ impl ResourcesSettings {
         if self.log_file_size_limit_mb == 0 {
             return;
         }
+        // Settings can be re-applied on every keystroke in the settings file, so
+        // only log when the limit actually changes to keep the log quiet.
+        static LAST_APPLIED_MB: AtomicU64 = AtomicU64::new(u64::MAX);
         let max_bytes = self.log_file_size_limit_mb.saturating_mul(1024 * 1024);
         zlog::set_max_file_size_bytes(max_bytes);
-        log::info!(
-            "resource monitor: log file size limit set to {} MB",
-            self.log_file_size_limit_mb
-        );
+        if LAST_APPLIED_MB.swap(self.log_file_size_limit_mb, Ordering::Relaxed)
+            != self.log_file_size_limit_mb
+        {
+            log::info!(
+                "resource monitor: log file size limit set to {} MB",
+                self.log_file_size_limit_mb
+            );
+        }
     }
 }
 
@@ -54,8 +62,10 @@ impl ResourcesSettings {
 /// non-zero. The interval is re-read every cycle, so toggling the setting takes
 /// effect without a restart.
 ///
-/// This is a no-op when the interval is `0` (the default), so it does not change
-/// default behavior. See [`release_free_memory_to_os`] for the allocator hook.
+/// Trimming is enabled by default (see the default for
+/// `trim_interval_secs`), because freed pages otherwise stay resident after a
+/// peak and make the process look like it only ever grows. Setting the interval
+/// to `0` disables it. See [`release_free_memory_to_os`] for the allocator hook.
 pub fn init_memory_trimmer(cx: &mut App) {
     if cfg!(test) {
         return;
@@ -89,8 +99,8 @@ pub fn init_memory_trimmer(cx: &mut App) {
 
 /// Releases unused heap pages back to the operating system.
 ///
-/// With the default `mimalloc` allocator this calls `mi_collect(true)`, which
-/// returns retained pages; otherwise on glibc it falls back to `malloc_trim`.
+/// On glibc this calls `malloc_trim`; with the opt-in `mimalloc` feature it
+/// calls `mi_collect(true)` instead.
 fn release_free_memory_to_os() {
     #[cfg(feature = "mimalloc")]
     {

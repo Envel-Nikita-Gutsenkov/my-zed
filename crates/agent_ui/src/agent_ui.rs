@@ -296,6 +296,9 @@ actions!(
         ToggleOptionsMenu,
         /// Toggles the profile or mode selector for switching between agent profiles.
         ToggleProfileSelector,
+        /// Grants or revokes browser access for the current chat, letting the
+        /// agent open pages and interact with them.
+        ToggleBrowser,
         /// Cycles through available session modes.
         CycleModeSelector,
         /// Expands the message editor to full size.

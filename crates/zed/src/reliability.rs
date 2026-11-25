@@ -150,9 +150,10 @@ fn start_memory_usage_logging(
                         None => String::new(),
                     };
                     log::info!(
-                        "memory usage: resident {} MiB{delta}, virtual {} MiB",
+                        "memory usage: resident {} MiB{delta}, virtual {} MiB{}",
                         resident / MIB,
                         process.virtual_memory() / MIB,
+                        heap_stats_suffix(),
                     );
                     if diagnostics_sender.unbounded_send(()).is_err() {
                         return;
@@ -165,6 +166,28 @@ fn start_memory_usage_logging(
         }
     })
     .detach();
+}
+
+/// Splits the glibc heap into live allocations, free-but-retained space, and memory
+/// served directly by `mmap`. Distinguishes real application growth from allocator
+/// retention, which is otherwise impossible to tell apart from the resident size alone.
+#[cfg(all(not(feature = "mimalloc"), target_os = "linux", target_env = "gnu"))]
+fn heap_stats_suffix() -> String {
+    const MIB: u64 = 1024 * 1024;
+    // SAFETY: `mallinfo2` only reads glibc's allocator bookkeeping and is safe to call
+    // from any thread.
+    let info = unsafe { libc::mallinfo2() };
+    format!(
+        ", heap in-use {} MiB, retained {} MiB, mmap {} MiB",
+        info.uordblks as u64 / MIB,
+        info.fordblks as u64 / MIB,
+        info.hblkhd as u64 / MIB,
+    )
+}
+
+#[cfg(not(all(not(feature = "mimalloc"), target_os = "linux", target_env = "gnu")))]
+fn heap_stats_suffix() -> String {
+    String::new()
 }
 
 fn log_worktree_diagnostics(

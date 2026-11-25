@@ -38,7 +38,7 @@ const COMMAND_OUTPUT_LIMIT: u64 = 16 * 1024;
 ///
 /// Do not use this tool for commands that run indefinitely, such as servers (like `npm run start`, `npm run dev`, `python -m http.server`, etc) or file watchers that don't terminate on their own.
 ///
-/// For potentially long-running commands, prefer specifying `timeout_ms` to bound runtime and prevent indefinite hangs.
+/// Foreground commands are capped at 10 minutes regardless of `timeout_ms`. For anything that may legitimately run longer, start it in the background (e.g. `nohup … &`, `tmux`, or a detached session) so the tool returns immediately.
 ///
 /// Remember that each invocation of this tool will spawn a new shell process, so you can't rely on any state from previous invocations.
 ///
@@ -56,7 +56,7 @@ pub struct TerminalToolInput {
     pub command: String,
     /// Working directory: a project root directory or any subdirectory of one, given by name or absolute path. E.g. `my-project/src`, `/home/user/my-project`, or on Windows `my-project\src` or `C:\Users\me\my-project`.
     pub cd: String,
-    /// Optional maximum runtime (in milliseconds). If exceeded, the running terminal task is killed.
+    /// Optional maximum runtime (in milliseconds, capped at 10 minutes). If exceeded, the running terminal task is killed. Omit to use the 10-minute default.
     pub timeout_ms: Option<u64>,
     /// Return only the first N lines of terminal output to the model after the command finishes. Do not pipe output to `head`; use this parameter instead so the user can still see live output. Avoid requesting too many lines, or the response may waste tokens or exceed the context window.
     #[serde(default)]
@@ -80,7 +80,7 @@ pub struct TerminalToolInput {
 ///
 /// Do not use this tool for commands that run indefinitely, such as servers (like `npm run start`, `npm run dev`, `python -m http.server`, etc) or file watchers that don't terminate on their own.
 ///
-/// For potentially long-running commands, prefer specifying `timeout_ms` to bound runtime and prevent indefinite hangs.
+/// Foreground commands are capped at 10 minutes regardless of `timeout_ms`. For anything that may legitimately run longer, start it in the background (e.g. `nohup … &`, `tmux`, or a detached session) so the tool returns immediately.
 ///
 /// Remember that each invocation of this tool will spawn a new shell process, so you can't rely on any state from previous invocations.
 ///
@@ -98,7 +98,7 @@ pub struct SandboxedTerminalToolInput {
     pub command: String,
     /// Working directory: a project root directory or any subdirectory of one, given by name or absolute path. E.g. `my-project/src`, `/home/user/my-project`, or on Windows `my-project\src` or `C:\Users\me\my-project`.
     pub cd: String,
-    /// Optional maximum runtime (in milliseconds). If exceeded, the running terminal task is killed.
+    /// Optional maximum runtime (in milliseconds, capped at 10 minutes). If exceeded, the running terminal task is killed. Omit to use the 10-minute default.
     pub timeout_ms: Option<u64>,
     /// Return only the first N lines of terminal output to the model after the command finishes. Do not pipe output to `head`; use this parameter instead so the user can still see live output. Avoid requesting too many lines, or the response may waste tokens or exceed the context window.
     #[serde(default)]
@@ -991,38 +991,36 @@ async fn run_terminal_tool(
         }
     });
 
-    let timeout = input.timeout_ms.map(Duration::from_millis);
+    // A foreground command must never be able to block the turn forever. Even
+    // when the model does not pass `timeout_ms` (as it does for a malformed
+    // command that happens to hang, e.g. waiting on stdin), we cap the runtime.
+    // Commands that legitimately need longer should be started in the
+    // background so the tool returns immediately.
+    const MAX_TERMINAL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+    let timeout = input
+        .timeout_ms
+        .map(Duration::from_millis)
+        .unwrap_or(MAX_TERMINAL_TIMEOUT)
+        .min(MAX_TERMINAL_TIMEOUT);
 
     let mut timed_out = false;
     let mut user_stopped_via_signal = false;
     let wait_for_exit = terminal.wait_for_exit(cx).map_err(|e| e.to_string())?;
 
-    match timeout {
-        Some(timeout) => {
-            let timeout_task = cx.background_executor().timer(timeout);
+    {
+        let timeout_task = cx.background_executor().timer(timeout);
 
-            futures::select! {
-                _ = wait_for_exit.clone().fuse() => {},
-                _ = timeout_task.fuse() => {
-                    timed_out = true;
-                    terminal.kill(cx).map_err(|e| e.to_string())?;
-                    wait_for_exit.await;
-                }
-                _ = event_stream.cancelled_by_user().fuse() => {
-                    user_stopped_via_signal = true;
-                    terminal.kill(cx).map_err(|e| e.to_string())?;
-                    wait_for_exit.await;
-                }
+        futures::select! {
+            _ = wait_for_exit.clone().fuse() => {},
+            _ = timeout_task.fuse() => {
+                timed_out = true;
+                terminal.kill(cx).map_err(|e| e.to_string())?;
+                wait_for_exit.await;
             }
-        }
-        None => {
-            futures::select! {
-                _ = wait_for_exit.clone().fuse() => {},
-                _ = event_stream.cancelled_by_user().fuse() => {
-                    user_stopped_via_signal = true;
-                    terminal.kill(cx).map_err(|e| e.to_string())?;
-                    wait_for_exit.await;
-                }
+            _ = event_stream.cancelled_by_user().fuse() => {
+                user_stopped_via_signal = true;
+                terminal.kill(cx).map_err(|e| e.to_string())?;
+                wait_for_exit.await;
             }
         }
     };
@@ -1284,11 +1282,14 @@ fn process_content(
             )
         }
     } else if timed_out {
+        let guidance = "The command hit the terminal time limit (commands are capped at 10 minutes). \
+            If it needs longer, start it in the background (for example with `nohup … &`, `tmux`, \
+            or a detached session) so the tool returns immediately, then poll its output or log file.";
         if is_empty {
-            format!("Command \"{command}\" timed out. No output was captured.")
+            format!("Command \"{command}\" timed out. No output was captured.\n\n{guidance}")
         } else {
             format!(
-                "Command \"{command}\" timed out. Output captured before timeout:\n\n{}",
+                "Command \"{command}\" timed out. Output captured before timeout:\n\n{}\n\n{guidance}",
                 content
             )
         }

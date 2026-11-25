@@ -53,9 +53,15 @@ upstream Zed. It is not a chronological log: the fork ships as a single version.
 ### Resources and telemetry
 
 - The `resources` block is fully configurable (sample interval, history length,
-  status bar visibility, log size limit, and an optional `trim_interval_secs`
-  that periodically returns unused heap pages to the OS via `malloc_trim`). The
+  status bar visibility, log size limit, and `trim_interval_secs`, which
+  periodically returns unused heap pages to the OS via `malloc_trim`). The
   status bar shows CPU load with a mini-graph and current memory use.
+- Memory no longer ratchets upward across a long session. On Linux/glibc the
+  process raises `M_MMAP_THRESHOLD`/`M_TRIM_THRESHOLD` at startup so large
+  transient buffers are returned to the OS when freed instead of inflating the
+  heap, and `resources.trim_interval_secs` now defaults to `60` instead of `0`.
+  The hourly `memory usage` log line also reports live heap, retained (free)
+  heap, and `mmap` totals so growth can be told apart from fragmentation.
 - Microsoft's mimalloc is available as an opt-in Cargo feature (`--features
   mimalloc`). It is not enabled by default because, measured on this fork, it
   used more resident memory than glibc unless also tuned with

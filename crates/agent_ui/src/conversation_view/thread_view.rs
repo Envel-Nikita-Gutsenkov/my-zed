@@ -5783,6 +5783,7 @@ impl ThreadView {
                                     .gap_0p5()
                                     .child(self.render_add_context_button(cx))
                                     .child(self.render_follow_toggle(cx))
+                                    .child(self.render_browser_toggle(cx))
                                     .when(!self.is_subagent(), |this| {
                                         this.child(self.render_auto_continue_toggle(cx))
                                     })
@@ -7229,12 +7230,53 @@ impl ThreadView {
         })
     }
 
+    fn render_browser_toggle(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let native_thread = self.as_native_thread(cx);
+        let enabled = native_thread
+            .as_ref()
+            .is_some_and(|thread| thread.read(cx).browser_enabled());
+
+        let tooltip = if enabled {
+            "Browser access is on for this chat: the agent can open sites and interact with them."
+        } else {
+            "Give the agent browser access in this chat: it can open sites and interact with them."
+        };
+
+        IconButton::new("browser-toggle", IconName::Public)
+            .icon_size(IconSize::Small)
+            .icon_color(if enabled { Color::Accent } else { Color::Muted })
+            .toggle_state(enabled)
+            .tooltip(Tooltip::text(tooltip))
+            .on_click(cx.listener(|this, _, _window, cx| {
+                this.toggle_browser_access(cx);
+            }))
+    }
+
+    fn toggle_browser_access(&mut self, cx: &mut Context<Self>) {
+        if let Some(thread) = self.as_native_thread(cx) {
+            thread.update(cx, |thread, cx| {
+                let enabled = !thread.browser_enabled();
+                thread.set_browser_enabled(enabled, cx);
+            });
+            cx.notify();
+        }
+    }
+
+    fn toggle_browser(
+        &mut self,
+        _: &crate::ToggleBrowser,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.toggle_browser_access(cx);
+    }
+
     fn render_auto_continue_toggle(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let enabled = self.auto_continue_enabled(cx);
         let tooltip = if enabled {
-            "Auto mode is on: the agent keeps working after each turn until it reports ALL DONE."
+            "Auto mode is on: the agent decides on its own and keeps working after each turn until it reports ALL DONE (or AUTO-BLOCKED if it is truly stuck)."
         } else {
-            "Enable Auto mode: keep the agent working after each turn until it reports ALL DONE."
+            "Enable Auto mode: the agent decides on its own and keeps working after each turn until it reports ALL DONE (or AUTO-BLOCKED if it is truly stuck)."
         };
 
         IconButton::new("auto-continue", IconName::FastForward)
@@ -14491,7 +14533,9 @@ impl Render for ThreadView {
                         .ok();
                 }
             }))
+            .on_action(cx.listener(Self::toggle_browser))
             .on_action(cx.listener(Self::keep_all))
+            .on_action(cx.listener(Self::toggle_browser))
             .on_action(cx.listener(Self::reject_all))
             .on_action(cx.listener(Self::undo_last_reject))
             .on_action(cx.listener(Self::allow_always))

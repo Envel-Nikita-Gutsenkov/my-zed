@@ -139,6 +139,8 @@ actions!(
         ShowDefaultSemanticTokenRules,
         /// Shows all hidden windows.
         ShowAll,
+        /// Copies chats, workspace state, and downloaded assets from a regular Zed install. Restarts to apply.
+        MigrateFromZed,
         /// Toggles fullscreen mode.
         ToggleFullScreen,
         /// Zooms the window.
@@ -328,6 +330,58 @@ pub fn init(cx: &mut App) {
     })
     .on_action(|_: &About, cx| {
         open_about_window(cx);
+    })
+    .on_action(|_: &MigrateFromZed, cx| {
+        with_active_or_new_workspace(cx, |_workspace, window, cx| {
+            let prompt = window.prompt(
+                PromptLevel::Warning,
+                "Import data from Zed?",
+                Some(
+                    "Copies chats, workspace state, and downloaded assets from your regular Zed \
+                     install. Existing my-zed data is backed up, and my-zed restarts to apply.",
+                ),
+                &["Import and Restart"],
+                cx,
+            );
+
+            cx.spawn_in(window, async move |workspace, cx| {
+                if prompt.await != Ok(0) {
+                    return anyhow::Ok(());
+                }
+
+                match crate::migrate_from_zed::queue_import() {
+                    Ok(_) => {
+                        workspace.update_in(cx, |workspace, _, cx| {
+                            workspace.show_toast(
+                                Toast::new(
+                                    NotificationId::unique::<MigrateFromZed>(),
+                                    "Importing data from Zed — restarting…",
+                                ),
+                                cx,
+                            );
+                        })?;
+                        cx.background_executor()
+                            .timer(std::time::Duration::from_millis(1200))
+                            .await;
+                        cx.update(|_window, cx| cx.restart())?;
+                    }
+                    Err(error) => {
+                        workspace.update_in(cx, |workspace, _, cx| {
+                            workspace.show_toast(
+                                Toast::new(
+                                    NotificationId::unique::<MigrateFromZed>(),
+                                    format!("Could not import from Zed: {error}"),
+                                ),
+                                cx,
+                            );
+                        })?;
+                    }
+                }
+
+                anyhow::Ok(())
+            })
+            .detach_and_log_err(cx);
+        });
     });
 }
 
