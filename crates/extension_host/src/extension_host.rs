@@ -82,6 +82,17 @@ pub(crate) const MAX_REMOTE_SYNC_RETRY_DELAY: Duration = Duration::from_secs(60)
 pub(crate) const MAX_REMOTE_SYNC_ATTEMPTS: usize = 10;
 pub(crate) const REMOTE_SYNC_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 
+/// How often the wasm memory reclaimer checks loaded extensions.
+const WASM_RECYCLE_CHECK_INTERVAL: Duration = Duration::from_secs(120);
+/// An extension whose wasm linear memory reaches this size is recycled.
+/// Linear memory only ever grows and is never returned to the OS, so a long
+/// session would otherwise hold every byte an extension has ever asked for
+/// until the app restarts. Ordinary extensions stay well below this size.
+const WASM_RECYCLE_THRESHOLD_BYTES: usize = 96 * 1024 * 1024;
+/// Minimum time between recycling the same extension, so one that legitimately
+/// keeps a large working set is not restarted repeatedly.
+const WASM_RECYCLE_COOLDOWN: Duration = Duration::from_secs(30 * 60);
+
 pub(crate) fn remote_sync_retry_delay(attempts: usize) -> Duration {
     let exponential = REMOTE_SYNC_RETRY_DELAY * 2u32.saturating_pow(attempts.min(30) as u32);
     exponential.min(MAX_REMOTE_SYNC_RETRY_DELAY)
@@ -168,6 +179,10 @@ pub struct ExtensionStore {
     pub outstanding_operations: BTreeMap<Arc<str>, ExtensionOperation>,
     pub index_path: PathBuf,
     pub modified_extensions: HashSet<Arc<str>>,
+    /// When each extension instance was last recycled to reclaim wasm linear
+    /// memory. Used to keep a large-but-stable extension from being restarted
+    /// repeatedly.
+    pub last_wasm_recycle: HashMap<Arc<str>, Instant>,
     pub wasm_host: Arc<WasmHost>,
     pub wasm_extensions: Vec<(Arc<ExtensionManifest>, WasmExtension)>,
     pub tasks: Vec<Task<()>>,
@@ -393,6 +408,7 @@ impl ExtensionStore {
             builder: Arc::new(ExtensionBuilder::new(builder_client, build_dir)),
             outstanding_operations: Default::default(),
             modified_extensions: Default::default(),
+            last_wasm_recycle: HashMap::default(),
             reload_complete_senders: Vec::new(),
             wasm_host: WasmHost::new(
                 fs.clone(),
@@ -534,6 +550,20 @@ impl ExtensionStore {
             }
         }));
 
+        this.tasks.push(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(WASM_RECYCLE_CHECK_INTERVAL)
+                    .await;
+                if this
+                    .update(cx, |this, cx| this.reclaim_grown_wasm_extensions(cx))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        }));
+
         this
     }
 
@@ -552,6 +582,54 @@ impl ExtensionStore {
         async move {
             rx.await.ok();
         }
+    }
+
+    /// Recycles extension instances whose wasm linear memory has grown large,
+    /// freeing the committed pages that wasmtime never returns to the OS on its
+    /// own. Reloading the extension recreates its `Store` from the compiled
+    /// component, which starts with a small linear memory again. Returns whether
+    /// any extension was recycled.
+    fn reclaim_grown_wasm_extensions(&mut self, cx: &mut Context<Self>) -> bool {
+        // Never interfere with a reload that is already in flight or with an
+        // install/update operation, which owns the extension's files.
+        if !self.reload_complete_senders.is_empty() {
+            return false;
+        }
+
+        let now = Instant::now();
+        let mut to_recycle = Vec::new();
+        for (manifest, extension) in &self.wasm_extensions {
+            let id = &manifest.id;
+            if self.outstanding_operations.contains_key(id) {
+                continue;
+            }
+            if extension.linear_memory_bytes() < WASM_RECYCLE_THRESHOLD_BYTES {
+                continue;
+            }
+            let cooled_down = self
+                .last_wasm_recycle
+                .get(id)
+                .is_none_or(|last| now.duration_since(*last) >= WASM_RECYCLE_COOLDOWN);
+            if cooled_down {
+                to_recycle.push(id.clone());
+            }
+        }
+
+        if to_recycle.is_empty() {
+            return false;
+        }
+
+        for id in &to_recycle {
+            log::info!("recycling extension {:?} to reclaim wasm linear memory", id);
+            self.modified_extensions.insert(id.clone());
+            self.last_wasm_recycle.insert(id.clone(), now);
+        }
+        // `reload` is debounced and coalesced, so triggering it once is enough
+        // for every id added to `modified_extensions` above. The returned future
+        // only reports completion, so drive it to completion and detach.
+        let reload = self.reload(None, cx);
+        cx.spawn(async move |_, _| reload.await).detach();
+        true
     }
 
     fn extensions_dir(&self) -> PathBuf {
@@ -1424,6 +1502,9 @@ impl ExtensionStore {
 
         self.wasm_extensions
             .retain(|(extension, _)| !extensions_to_unload.contains(&extension.id));
+        for extension_id in &extensions_to_unload {
+            self.last_wasm_recycle.remove(extension_id);
+        }
         self.proxy.remove_user_themes(themes_to_remove);
         self.proxy.remove_icon_themes(icon_themes_to_remove);
         self.proxy

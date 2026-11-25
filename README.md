@@ -93,14 +93,22 @@ actually goes, and why "it still uses a lot" is not necessarily a leak:
 - **Long sessions grow through wasm linear memory.** Extensions and other wasm
   components run in wasmtime. A wasm linear memory only ever grows and is never
   handed back to the OS, so over a long session an editor that has been open for
-  many hours can hold several 128 MB wasm regions on top of its heap. This is the
+  many hours can accumulate wasm memory on top of its heap. This used to be the
   single largest contributor to a multi-gigabyte reading after a full day and it
-  cannot be reclaimed without a restart.
+  could not be reclaimed without a restart.
 
-So the practical ways to bring the number down are: restart after very long
-sessions (this is the only thing that reclaims wasm memory), close tabs you are
-not using (this drops their parse trees), and disable browser tools and unused
-extensions when they are not needed.
+That last one is now handled automatically. Each wasm extension's linear memory
+is observed through a `ResourceLimiter`, which also caps it at 512 MB so a single
+misbehaving extension cannot grow without bound. A background task checks every
+couple of minutes and transparently reloads any extension whose linear memory has
+crossed 96 MB (and grown at least 32 MB since its last recycle), which hands the
+old linear memory back to the process. Reclamation is conservative so ordinary
+extensions are never touched.
+
+So the practical ways to bring the number down are: close tabs you are not using
+(this drops their parse trees), and disable browser tools and unused extensions
+when they are not needed. A restart is no longer required just to reclaim wasm
+memory, though it still releases everything at once.
 
 What the status-bar number actually measures, and what trimming can and cannot
 do:

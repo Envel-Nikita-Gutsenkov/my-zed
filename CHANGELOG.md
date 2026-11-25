@@ -101,8 +101,15 @@ upstream Zed. It is not a chronological log: the fork ships as a single version.
   which previously started `npx @playwright/mcp` on every project.
 - `heaptrack` profiling of this fork is documented in the README's Memory
   section: the editor is ~120 MB of heap at idle, open buffers add ~2–3 MB of
-  tree-sitter parse trees each, and long sessions grow mainly through wasm
-  linear memory (extensions) that only a restart reclaims.
+  tree-sitter parse trees each, and long sessions used to grow through wasm
+  linear memory (extensions) that only a restart reclaimed.
+- Wasm linear memory is now reclaimed automatically instead of only on restart.
+  Each wasm extension's linear memory is tracked by a `ResourceLimiter` and
+  capped at 512 MB, and a background task reloads any extension whose linear
+  memory crosses 96 MB (growing at least 32 MB since its last recycle), handing
+  the old pages back to the process. The browser context server is also
+  on-demand now, so no Playwright or Chromium process runs until a chat turns
+  browser access on.
 - Microsoft's mimalloc is available as an opt-in Cargo feature (`--features
   mimalloc`). It is not enabled by default because, measured on this fork, it
   used more resident memory than glibc unless also tuned with

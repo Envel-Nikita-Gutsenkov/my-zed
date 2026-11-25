@@ -36,6 +36,17 @@ queue. Ships as a separate app ("my zed") that reuses the existing Zed config.
 - [x] Local `dev` build version string includes the short commit hash.
 - [x] Windows installer GitHub Actions workflow (manual `workflow_dispatch`
       only). Not buildable from Linux; needs Actions enabled on the repo.
+- [x] Browser context server is now **on demand** (`project/src/context_server_store.rs`):
+      the built-in `browser` server (`npx @playwright/mcp`) is no longer started
+      at project open, so no Playwright/Chromium process exists until a chat
+      enables browser access. `request_on_demand_server` /
+      `release_on_demand_server` drive it; tests no longer spawn `npx`.
+- [x] Wasm linear-memory reclamation (`extension_host`): a `ResourceLimiter`
+      records each extension's linear-memory high-water mark and caps it at
+      512 MiB; a background task (every 2 min) recycles any extension past
+      96 MiB (+32 MiB since last recycle) via the existing modified-extension
+      reload path, freeing linear memory that otherwise only grows until restart.
+      Unit test `test_wasm_memory_limiter_records_and_caps_growth`.
 
 ## Active tasks
 - [x] CHANGELOG.md.

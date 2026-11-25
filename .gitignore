@@ -77,3 +77,4 @@ credentials.json
 
 # Local gh CLI config used by the agent
 .tmp-gh/
+.agent/

@@ -33,13 +33,16 @@ use settings::Settings;
 use std::{
     borrow::Cow,
     path::{Path, PathBuf},
-    sync::{Arc, LazyLock, OnceLock},
+    sync::{
+        Arc, LazyLock, OnceLock,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::Duration,
 };
 use task::{DebugScenario, SpawnInTerminal, TaskTemplate, ZedDebugConfig};
 use util::paths::SanitizedPath;
 use wasmtime::{
-    CacheStore, Engine, Store,
+    CacheStore, Engine, ResourceLimiter, Store,
     component::{Component, ResourceTable},
 };
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
@@ -65,12 +68,25 @@ pub struct WasmExtension {
     pub manifest: Arc<ExtensionManifest>,
     pub work_dir: Arc<Path>,
     pub zed_api_version: Version,
+    /// High-water mark of this instance's wasm linear memory, updated by the
+    /// store's `ResourceLimiter`. Read by the extension host to decide when to
+    /// recycle the instance to reclaim memory that linear memory cannot release
+    /// on its own.
+    linear_memory_bytes: Arc<AtomicUsize>,
     _task: Arc<Task<Result<(), gpui_tokio::JoinError>>>,
 }
 
 impl Drop for WasmExtension {
     fn drop(&mut self) {
         self.tx.close_channel();
+    }
+}
+
+impl WasmExtension {
+    /// The high-water mark of this instance's wasm linear memory, in bytes.
+    /// Zero if the instance has not grown its memory since it was loaded.
+    pub fn linear_memory_bytes(&self) -> usize {
+        self.linear_memory_bytes.load(Ordering::Relaxed)
     }
 }
 
@@ -538,6 +554,53 @@ impl extension::Extension for WasmExtension {
     }
 }
 
+/// The maximum linear memory a single extension's wasm store may grow to.
+///
+/// wasm linear memory never shrinks once grown, so an extension that grows its
+/// heap over a long session would otherwise keep every byte resident until the
+/// app restarts. This cap bounds the damage from a single misbehaving extension;
+/// ordinary extensions grow well below it. Once an extension exceeds the much
+/// smaller recycle threshold it is transparently restarted (see
+/// `ExtensionsLoaded`/recycling in `extension_host`), which hands the old
+/// linear memory, and the pages it pinned, back to the OS.
+const MAX_WASM_LINEAR_MEMORY_BYTES: usize = 512 * 1024 * 1024;
+
+/// Tracks the high-water mark of a store's wasm linear memory so the extension
+/// host can decide when to recycle an instance.
+///
+/// `ResourceLimiter::memory_growing` is invoked on every `memory.grow`, which is
+/// the only way linear memory can change size after instantiation, so recording
+/// `desired` there yields an accurate, portable size without needing a handle to
+/// the exported `Memory` (not available through every versioned WIT binding).
+struct WasmMemoryLimiter {
+    current_bytes: Arc<AtomicUsize>,
+}
+
+impl ResourceLimiter for WasmMemoryLimiter {
+    fn memory_growing(
+        &mut self,
+        _current: usize,
+        desired: usize,
+        _maximum: Option<usize>,
+    ) -> wasmtime::Result<bool> {
+        // Record the attempted size even when the growth is rejected, so an
+        // extension that tries to grow without bound is still visible to the
+        // reclaimer and gets recycled instead of silently spinning on failed
+        // `memory.grow` calls.
+        self.current_bytes.store(desired, Ordering::Relaxed);
+        Ok(desired <= MAX_WASM_LINEAR_MEMORY_BYTES)
+    }
+
+    fn table_growing(
+        &mut self,
+        _current: usize,
+        _desired: usize,
+        _maximum: Option<usize>,
+    ) -> wasmtime::Result<bool> {
+        Ok(true)
+    }
+}
+
 pub struct WasmState {
     manifest: Arc<ExtensionManifest>,
     pub table: ResourceTable,
@@ -545,6 +608,7 @@ pub struct WasmState {
     pub host: Arc<WasmHost>,
     pub(crate) capability_granter: CapabilityGranter,
     pub(crate) language_server_status_source: Option<gpui::EntityId>,
+    memory_limiter: WasmMemoryLimiter,
 }
 
 type MainThreadCall = Box<dyn Send + for<'a> FnOnce(&'a mut AsyncApp) -> LocalBoxFuture<'a, ()>>;
@@ -667,6 +731,7 @@ impl WasmHost {
 
         let load_extension = |zed_api_version: Version, component| async move {
             let wasi_ctx = this.build_wasi_ctx(&manifest).await?;
+            let linear_memory_bytes = Arc::new(AtomicUsize::new(0));
             let mut store = wasmtime::Store::new(
                 &this.engine,
                 WasmState {
@@ -679,8 +744,17 @@ impl WasmHost {
                         manifest.clone(),
                     ),
                     language_server_status_source: None,
+                    memory_limiter: WasmMemoryLimiter {
+                        current_bytes: linear_memory_bytes.clone(),
+                    },
                 },
             );
+            // Bound and observe the extension's linear memory. The limiter
+            // rejects growth past `MAX_WASM_LINEAR_MEMORY_BYTES` and records the
+            // resulting size so the extension host can recycle an instance that
+            // has grown too large, releasing memory linear memory never gives
+            // back on its own.
+            store.limiter(|state| &mut state.memory_limiter);
             // Store will yield after 1 tick, and get a new deadline of 1 tick after each yield.
             store.set_epoch_deadline(1);
             store.epoch_deadline_async_yield_and_update(1);
@@ -713,6 +787,7 @@ impl WasmHost {
                 this.work_dir.join(manifest.id.as_ref()).into(),
                 tx,
                 zed_api_version,
+                linear_memory_bytes,
             ))
         };
 
@@ -721,7 +796,7 @@ impl WasmHost {
 
             // Run wasi-dependent operations on tokio.
             // wasmtime_wasi internally uses tokio for I/O operations.
-            let (extension_task, manifest, work_dir, tx, zed_api_version) =
+            let (extension_task, manifest, work_dir, tx, zed_api_version, linear_memory_bytes) =
                 gpui_tokio::Tokio::spawn(cx, load_extension(zed_api_version, component)).await??;
 
             // Run the extension message loop on tokio since extension
@@ -733,6 +808,7 @@ impl WasmHost {
                 work_dir,
                 tx,
                 zed_api_version,
+                linear_memory_bytes,
                 _task: task,
             })
         })
@@ -1144,6 +1220,41 @@ mod tests {
         assert!(
             result.is_err(),
             "symlink escape through deep non-existent path should be rejected, but got: {result:?}",
+        );
+    }
+
+    #[test]
+    fn test_wasm_memory_limiter_records_and_caps_growth() {
+        let current_bytes = Arc::new(AtomicUsize::new(0));
+        let mut limiter = WasmMemoryLimiter {
+            current_bytes: current_bytes.clone(),
+        };
+
+        // Growth within the cap is allowed and recorded.
+        assert!(
+            limiter
+                .memory_growing(0, 64 * 1024 * 1024, None)
+                .expect("growth should not error")
+        );
+        assert_eq!(current_bytes.load(Ordering::Relaxed), 64 * 1024 * 1024);
+
+        // Growth past the cap is rejected...
+        assert!(
+            !limiter
+                .memory_growing(64 * 1024 * 1024, MAX_WASM_LINEAR_MEMORY_BYTES + 1, None)
+                .expect("growth should not error")
+        );
+        // ...and the rejected request is still recorded so the reclaimer can see
+        // that the instance is trying to grow without bound.
+        assert_eq!(
+            current_bytes.load(Ordering::Relaxed),
+            MAX_WASM_LINEAR_MEMORY_BYTES + 1
+        );
+
+        assert!(
+            limiter
+                .memory_growing(0, MAX_WASM_LINEAR_MEMORY_BYTES, None)
+                .unwrap()
         );
     }
 }
