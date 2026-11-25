@@ -54,9 +54,22 @@ queue. Ships as a separate app ("my zed") that reuses the existing Zed config.
 - [x] Local commit + push to origin/main.
 - [x] Pushed both fixes; the build/test is left to GitHub CI (ci.yml runs on
       push to main: fmt, `cargo check -p zed`, and unit tests).
-- [ ] Release installer build is triggered manually via the Release workflow
-      (`workflow_dispatch`); `gh` is not authenticated here so it must be run
-      by the user (or after `gh auth login`).
+- [x] Added `## 1.31.0-my.2` CHANGELOG section documenting the two memory fixes
+      (commit `0107d17`), pushed to main.
+- [x] Pushed tag `v1.31.0-my.2` -> triggers `.github/workflows/release.yml`
+      (Linux + Windows build, then publish). Release run created 2026-11-25T14:53Z.
+      Building: `zed-linux-x86_64.tar.gz`.
+- [ ] Poll release run until Linux asset is published, download it, and replace
+      `~/.local/my-zed.app/bin/my-zed` with the new binary; verify mtime/hash.
+
+## Release / install state
+- GitHub release `v1.31.0-my.1` (2026-11-23) is STALE (predates both fixes).
+- Installed binary `~/.local/my-zed.app/bin/my-zed` mtime 2026-11-25 13:27 +0300
+  also predates the fixes (14:19 and 16:15) -> does NOT contain them.
+- New release to install once the tag build finishes: `v1.31.0-my.2`, asset
+  `zed-linux-x86_64.tar.gz`, URL
+  `https://github.com/Envel-Nikita-Gutsenkov/my-zed/releases/download/v1.31.0-my.2/zed-linux-x86_64.tar.gz`.
+- `gh` is unauthenticated; use unauthenticated `curl` to api.github.com for polling.
 
 ## Install details
 - Binary: `~/.local/my-zed.app/bin/my-zed` (stripped `release-lite` build).

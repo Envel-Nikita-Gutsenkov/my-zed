@@ -3,6 +3,14 @@ name: Release
 # Builds installers for Linux and Windows and publishes them as a GitHub
 # Release. Only the three most recent releases are kept; older ones (and their
 # tags) are pruned automatically after each publish.
+#
+# Cache note: GitHub scopes caches per ref. A cache saved while building a tag
+# is only restorable by that same tag, so tag-triggered releases are always a
+# cold build. Only runs dispatched on the default branch (main) may write to the
+# default-branch cache scope, and that scope is restorable by tag runs too.
+# Therefore the fast path is to start a release via "Run workflow" on main: the
+# first dispatch warms the cache and every later release (dispatch or tag push)
+# restores it.
 on:
   workflow_dispatch:
     inputs:
@@ -108,6 +116,9 @@ jobs:
         with:
           shared-key: release-linux-${{ matrix.arch }}
           cache-on-failure: true
+          # Zed is almost entirely workspace crates. Without this rust-cache only
+          # stores third-party dependencies, so nearly the whole build reruns.
+          cache-workspace-crates: true
 
       - name: Set release channel
         shell: bash
@@ -146,6 +157,7 @@ jobs:
         with:
           shared-key: release-windows-x86_64
           cache-on-failure: true
+          cache-workspace-crates: true
 
       - name: Set release channel
         shell: pwsh

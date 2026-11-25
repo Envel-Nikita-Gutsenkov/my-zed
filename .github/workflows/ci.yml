@@ -63,6 +63,8 @@ jobs:
         with:
           shared-key: ci-linux
           cache-on-failure: true
+          # Most of Zed is workspace crates; without this only dependencies are cached.
+          cache-workspace-crates: true
 
       - name: Check the editor compiles
         run: cargo check -p zed
