@@ -4,6 +4,20 @@
 based on upstream Zed `1.31.0`. This file describes how the fork differs from
 upstream Zed. It is not a chronological log: the fork ships as a single version.
 
+## 1.31.0-my.2
+
+### Memory fixes
+
+- The built-in browser block no longer launches `npx @playwright/mcp` and a
+  headless Chromium for every project that opens. It now starts only when a
+  chat actually asks for browser access, which removes that whole process tree
+  (a large share of the app's resident memory) from the baseline footprint.
+- Extension WebAssembly linear memory is now bounded per extension (512 MiB
+  hard cap) and periodically reclaimed. Memory that a wasm linear memory has
+  grown into is never returned to the OS on its own, so any extension that had
+  grown past 96 MiB is now recycled at most every 30 minutes, giving its pages
+  back instead of letting the footprint creep up until a restart.
+
 ## 1.31.0-my.1
 
 ### Highlights
