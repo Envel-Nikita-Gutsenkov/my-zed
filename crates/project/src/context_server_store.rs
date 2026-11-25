@@ -706,6 +706,15 @@ impl ContextServerStore {
         result
     }
 
+    /// Re-runs the maintenance pass so that configured servers which were
+    /// previously stopped are started again. This lets an on-demand server
+    /// (such as the `browser` server) be brought back after it was stopped
+    /// once it was no longer needed, without waiting for a settings or
+    /// worktree change to trigger maintenance.
+    pub fn start_stopped_servers(&mut self, cx: &mut Context<Self>) {
+        self.available_context_servers_changed(cx);
+    }
+
     fn run_server(
         &mut self,
         server: Arc<ContextServer>,

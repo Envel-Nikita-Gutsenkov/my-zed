@@ -75,6 +75,26 @@ The remembered memory log line (`memory usage: resident ... MiB`) now also
 reports how the glibc heap splits into live allocations, free-but-retained
 space, and `mmap`, so it is possible to tell real growth from fragmentation.
 
+What the status-bar number actually measures, and what trimming can and cannot
+do:
+
+- **It is the whole process tree.** The status-bar memory reading is the summed
+  resident memory of the editor **and every child process it spawned** — language
+  servers, terminals, the extension host, and the browser. On this machine a
+  reading of ~2.7 GB was mostly a headless Chromium (~600 MB across its helper
+  processes) plus Playwright's Node processes, on top of ~1 GB for the editor.
+  Only the editor process is reported in the `memory usage` log line.
+- **Trimming only returns free pages.** Both allocator tuning and the periodic
+  trim act on memory the program has already released. If the log shows live
+  heap (`heap in-use`) climbing while retained heap stays near zero, the growth
+  is real, live allocations and no trim setting will shrink it — it has to be
+  traced with a profiler and fixed at the allocation site.
+
+The browser tools are backed by an isolated, in-memory Chromium. Its lifetime is
+tied to the per-chat browser toggle: turning browser access off shuts the browser
+server down (killing Playwright and its Chromium process tree) instead of leaving
+a headless Chromium resident until the app exits.
+
 An alternative allocator is still available: build with `--features mimalloc` to
 use Microsoft's mimalloc. It returns freed pages more eagerly than glibc, which
 helps long-running sessions, but it is not the default: measured on this fork it

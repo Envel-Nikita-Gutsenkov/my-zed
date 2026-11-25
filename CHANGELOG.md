@@ -58,6 +58,11 @@ upstream Zed. It is not a chronological log: the fork ships as a single version.
   It is re-read at the start of each request, which lets long conversations
   survive context compaction without re-exploring the codebase. Enabling the
   toggle also adds `.agent/` to each open worktree's `.gitignore`.
+- Per-chat **browser access** toggle (globe button next to the composer) grants
+  the agent the built-in browser tools. The Playwright-driven Chromium is an
+  isolated, in-memory browser, and its lifetime is now bound to the toggle:
+  turning browser access off shuts the browser server down (freeing its memory)
+  instead of leaving a headless Chromium running until the app exits.
 
 ### Resources and telemetry
 
@@ -65,12 +70,20 @@ upstream Zed. It is not a chronological log: the fork ships as a single version.
   status bar visibility, log size limit, and `trim_interval_secs`, which
   periodically returns unused heap pages to the OS via `malloc_trim`). The
   status bar shows CPU load with a mini-graph and current memory use.
+- The status-bar memory number is the **resident memory of the whole process
+  tree**, not just the editor process: it adds up every child the app spawns,
+  including language servers and the Playwright-driven Chromium behind the
+  browser tools. A large reading can therefore be mostly a child process rather
+  than the editor itself. The `memory usage` log line reports the editor
+  process alone (resident, live heap, retained heap, `mmap`).
 - Memory no longer ratchets upward across a long session. On Linux/glibc the
   process raises `M_MMAP_THRESHOLD`/`M_TRIM_THRESHOLD` at startup so large
   transient buffers are returned to the OS when freed instead of inflating the
   heap, and `resources.trim_interval_secs` now defaults to `60` instead of `0`.
   The hourly `memory usage` log line also reports live heap, retained (free)
-  heap, and `mmap` totals so growth can be told apart from fragmentation.
+  heap, and `mmap` totals so growth can be told apart from fragmentation. Note
+  that trimming only returns already-free pages; it does not (and cannot)
+  shrink live allocations.
 - Microsoft's mimalloc is available as an opt-in Cargo feature (`--features
   mimalloc`). It is not enabled by default because, measured on this fork, it
   used more resident memory than glibc unless also tuned with

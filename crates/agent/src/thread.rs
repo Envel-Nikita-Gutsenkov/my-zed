@@ -27,6 +27,7 @@ use chrono::{DateTime, Local, Utc};
 use client::UserStore;
 use cloud_api_types::Plan;
 use collections::{HashMap, HashSet, IndexMap};
+use context_server::ContextServerId;
 use fs::Fs;
 use futures::{
     FutureExt,
@@ -2161,7 +2162,25 @@ impl Thread {
         }
         self.browser_enabled = enabled;
         self.refresh_turn_tools(cx);
+        self.set_browser_server_running(enabled, cx);
         cx.notify();
+    }
+
+    /// Starts or stops the shared `browser` context server so that its
+    /// Playwright-driven Chromium only exists while some chat actually has
+    /// browser access enabled. Without this the server keeps running, and the
+    /// Chromium it spawns keeps hundreds of megabytes resident, until the app
+    /// exits even after browser access is turned off.
+    fn set_browser_server_running(&self, running: bool, cx: &mut Context<Self>) {
+        let server_store = self.context_server_registry.read(cx).server_store().clone();
+        let browser_server_id = ContextServerId(BROWSER_CONTEXT_SERVER_ID.into());
+        server_store.update(cx, |store, cx| {
+            if running {
+                store.start_stopped_servers(cx);
+            } else if let Err(error) = store.stop_server(&browser_server_id, cx) {
+                log::debug!("failed to stop browser context server: {error:#}");
+            }
+        });
     }
 
     /// Whether the agent should maintain a persistent task log in
