@@ -12,8 +12,8 @@ upstream Zed. It is not a chronological log: the fork ships as a single version.
   self-updates to upstream.
 - Aggressive, configurable token saving for agent requests.
 - No telemetry, no metrics, no mandatory cloud account.
-- Per-chat Auto mode, persisted message queue, resource monitor, and token
-  usage statistics.
+- Per-chat Auto mode, persisted message queue, resource monitor, token usage
+  statistics, and a per-chat task log.
 
 ### Agent and token savings
 
@@ -30,8 +30,10 @@ upstream Zed. It is not a chronological log: the fork ships as a single version.
   reasoning and neither text nor a tool call. Such an empty response resumes
   the turn instead of ending it without doing anything.
 - Token usage statistics window (`agent: Open Token Usage Stats`): input,
-  output, total and estimated saved tokens, plus a per-bucket bar chart over
-  selectable ranges. Usage is stored as one compact row per request in an
+  output, cache read/write, total and estimated saved tokens, plus a
+  per-bucket bar chart over selectable ranges. `Total` counts every processed
+  token, cache hits included, so it lines up with provider dashboards instead
+  of under-reporting. Usage is stored as one compact row per request in an
   append-only table and pruned after 90 days.
 
 ### Long-running chats
@@ -49,6 +51,13 @@ upstream Zed. It is not a chronological log: the fork ships as a single version.
   starts paused.
 - Auto mode is per chat, persisted, marked in the chat list, and hidden for
   subagent views.
+- Per-chat **Task Log** toggle (checklist button next to the composer). When
+  on, the agent maintains a running `.agent/TODO.md` in the project root with
+  its plan, key findings and a short file map, written in English and kept to
+  roughly 1000 lines so it stays a compact summary rather than a growing log.
+  It is re-read at the start of each request, which lets long conversations
+  survive context compaction without re-exploring the codebase. Enabling the
+  toggle also adds `.agent/` to each open worktree's `.gitignore`.
 
 ### Resources and telemetry
 

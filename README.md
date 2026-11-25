@@ -24,7 +24,12 @@ self-updates to upstream.
 - **No tracking.** Telemetry, metrics and auto-update are disabled; sign-in is
   hidden and the build cannot replace itself with upstream Zed.
 - **Long-running chats.** Age/count based chat maintenance, message queue that
-  survives restarts, per-chat Auto mode, and a token usage statistics window.
+  survives restarts, per-chat Auto mode, and a token usage statistics window
+  whose totals include cached tokens.
+- **Task log.** A per-chat Task Log toggle keeps a running `.agent/TODO.md` in
+  the project (plan, key findings, file map, in English, roughly 1000 lines) so
+  long tasks keep their thread across context compaction; `.agent/` is added to
+  `.gitignore` automatically.
 - **Lower memory use.** Allocator tuning and periodic heap trimming are on by
   default so freed pages return to the OS instead of making the process only ever
   grow; the `mimalloc` cargo feature remains available as an opt-in allocator.
