@@ -88,6 +88,14 @@ upstream Zed. It is not a chronological log: the fork ships as a single version.
   heap, and `mmap` totals so growth can be told apart from fragmentation. Note
   that trimming only returns already-free pages; it does not (and cannot)
   shrink live allocations.
+- The number of glibc malloc arenas is now capped at 2 in the binary itself
+  (overridable with `MALLOC_ARENA_MAX`) rather than only via the launcher's
+  environment, so the heap cannot fragment into one largely-empty arena per
+  worker thread when the app is started by other means.
+- `heaptrack` profiling of this fork is documented in the README's Memory
+  section: the editor is ~120 MB of heap at idle, open buffers add ~2–3 MB of
+  tree-sitter parse trees each, and long sessions grow mainly through wasm
+  linear memory (extensions) that only a restart reclaims.
 - Microsoft's mimalloc is available as an opt-in Cargo feature (`--features
   mimalloc`). It is not enabled by default because, measured on this fork, it
   used more resident memory than glibc unless also tuned with

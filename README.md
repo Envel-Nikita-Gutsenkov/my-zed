@@ -64,10 +64,11 @@ memory-oriented tweaks that are on by default:
   `M_MMAP_THRESHOLD`/`M_TRIM_THRESHOLD` handling so that large transient buffers
   (decoded images, rendering scratch space, diffs) are served by `mmap` and
   handed back to the kernel as soon as they are freed instead of inflating the
-  heap. Without this, resident memory ratchets up with every peak and never comes
-  back down, which looks like a leak even when nothing is retained. Set
-  `MALLOC_ARENA_MAX` yourself if you want to trade allocator parallelism for a
-  smaller footprint.
+  heap. It also caps the number of malloc arenas at 2 (unless
+  `MALLOC_ARENA_MAX` is set in the environment) so the heap cannot fragment into
+  one largely-empty arena per worker thread. Without this, resident memory
+  ratchets up with every peak and never comes back down, which looks like a leak
+  even when nothing is retained.
 - **Periodic heap trim.** `resources.trim_interval_secs` defaults to `60`.
   Every interval the app asks the allocator to return free pages to the OS
   (`malloc_trim(0)` with glibc, `mi_collect(true)` with mimalloc). The value is
@@ -77,15 +78,40 @@ The remembered memory log line (`memory usage: resident ... MiB`) now also
 reports how the glibc heap splits into live allocations, free-but-retained
 space, and `mmap`, so it is possible to tell real growth from fragmentation.
 
+### What profiling shows
+
+Allocation profiling with `heaptrack` on this fork explains where the memory
+actually goes, and why "it still uses a lot" is not necessarily a leak:
+
+- **At idle the editor is small.** A fresh instance with one project open peaks
+  at roughly 120 MB of heap. That is the working set, not a leak.
+- **Open buffers dominate the heap.** With ~100 buffers open the peak heap grows
+  to ~400 MB, and roughly half of it is tree-sitter parse trees
+  (`ts_malloc_default`, ~2–3 MB per open file) plus rope/text storage. Closing
+  tabs releases them because the buffer store only keeps weak references, but
+  every open tab keeps its full syntax tree resident.
+- **Long sessions grow through wasm linear memory.** Extensions and other wasm
+  components run in wasmtime. A wasm linear memory only ever grows and is never
+  handed back to the OS, so over a long session an editor that has been open for
+  many hours can hold several 128 MB wasm regions on top of its heap. This is the
+  single largest contributor to a multi-gigabyte reading after a full day and it
+  cannot be reclaimed without a restart.
+
+So the practical ways to bring the number down are: restart after very long
+sessions (this is the only thing that reclaims wasm memory), close tabs you are
+not using (this drops their parse trees), and disable browser tools and unused
+extensions when they are not needed.
+
 What the status-bar number actually measures, and what trimming can and cannot
 do:
 
 - **It is the whole process tree.** The status-bar memory reading is the summed
   resident memory of the editor **and every child process it spawned** — language
-  servers, terminals, the extension host, and the browser. On this machine a
-  reading of ~2.7 GB was mostly a headless Chromium (~600 MB across its helper
-  processes) plus Playwright's Node processes, on top of ~1 GB for the editor.
-  Only the editor process is reported in the `memory usage` log line.
+  servers, terminals, the extension host, and the browser. A reading in the
+  multiple gigabytes can be a mix of a headless Chromium (a few hundred MB across
+  its helper processes), Playwright's Node processes, the editor's own wasm
+  regions, and its heap. Only the editor process is reported in the `memory
+  usage` log line.
 - **Trimming only returns free pages.** Both allocator tuning and the periodic
   trim act on memory the program has already released. If the log shows live
   heap (`heap in-use`) climbing while retained heap stays near zero, the growth

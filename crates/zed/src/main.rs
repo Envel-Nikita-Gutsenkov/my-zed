@@ -215,19 +215,31 @@ static STARTUP_TIME: OnceLock<Instant> = OnceLock::new();
 /// these keep the resident set close to the live working set across long
 /// sessions instead of ratcheting upward with every peak.
 ///
+/// The number of malloc arenas is also capped so the heap does not fragment
+/// into one largely-empty arena per worker thread.
+///
 /// Must run before threads start allocating, ideally before any allocation.
 #[cfg(all(not(feature = "mimalloc"), target_os = "linux", target_env = "gnu"))]
 fn tune_system_allocator() {
     const MMAP_THRESHOLD_BYTES: libc::c_int = 1024 * 1024;
     const TRIM_THRESHOLD_BYTES: libc::c_int = 1024 * 1024;
+    const ARENA_COUNT: libc::c_int = 2;
 
     // SAFETY: `mallopt` only changes glibc malloc tunables and is safe to call
     // before the allocator is used. Setting `M_MMAP_THRESHOLD` explicitly also
     // pins it, disabling glibc's dynamic threshold bumping that otherwise lets
     // freed multi-megabyte blocks linger in the heap.
+    //
+    // glibc defaults to a new arena per thread (up to 8 × cores), and each
+    // arena keeps its own freed pages resident. Capping the count keeps the
+    // heap from fragmenting into one mostly-empty arena per worker thread. An
+    // explicit `MALLOC_ARENA_MAX` in the environment wins, so tuning still works.
     unsafe {
         libc::mallopt(libc::M_MMAP_THRESHOLD, MMAP_THRESHOLD_BYTES);
         libc::mallopt(libc::M_TRIM_THRESHOLD, TRIM_THRESHOLD_BYTES);
+        if std::env::var_os("MALLOC_ARENA_MAX").is_none() {
+            libc::mallopt(libc::M_ARENA_MAX, ARENA_COUNT);
+        }
     }
 }
 
