@@ -118,10 +118,13 @@ do:
   is real, live allocations and no trim setting will shrink it — it has to be
   traced with a profiler and fixed at the allocation site.
 
-The browser tools are backed by an isolated, in-memory Chromium. Its lifetime is
-tied to the per-chat browser toggle: turning browser access off shuts the browser
-server down (killing Playwright and its Chromium process tree) instead of leaving
-a headless Chromium resident until the app exits.
+The browser tools are backed by an isolated, in-memory Chromium. The `browser`
+context server is on demand: it is not started when a project opens, so no
+Playwright or Chromium process exists until some chat turns browser access on.
+Its lifetime is tied to the per-chat browser toggle — enabling browser access
+starts the server, and turning it off shuts it down, killing Playwright and its
+Chromium process tree instead of leaving a headless Chromium resident until the
+app exits.
 
 An alternative allocator is still available: build with `--features mimalloc` to
 use Microsoft's mimalloc. It returns freed pages more eagerly than glibc, which

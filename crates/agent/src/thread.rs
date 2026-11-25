@@ -1901,7 +1901,8 @@ pub(crate) struct StreamingSaveKey {
 /// The id of the context server that provides browser tools. When the
 /// per-thread browser toggle is on, this server's tools are exposed to the
 /// model; otherwise they are withheld regardless of the active profile.
-pub const BROWSER_CONTEXT_SERVER_ID: &str = "browser";
+pub const BROWSER_CONTEXT_SERVER_ID: &str =
+    project::context_server_store::BROWSER_CONTEXT_SERVER_ID;
 
 pub struct Thread {
     id: acp_v2::SessionId,
@@ -2176,9 +2177,9 @@ impl Thread {
         let browser_server_id = ContextServerId(BROWSER_CONTEXT_SERVER_ID.into());
         server_store.update(cx, |store, cx| {
             if running {
-                store.start_stopped_servers(cx);
-            } else if let Err(error) = store.stop_server(&browser_server_id, cx) {
-                log::debug!("failed to stop browser context server: {error:#}");
+                store.request_on_demand_server(&browser_server_id, cx);
+            } else {
+                store.release_on_demand_server(&browser_server_id, cx);
             }
         });
     }

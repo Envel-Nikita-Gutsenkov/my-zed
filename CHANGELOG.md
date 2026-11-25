@@ -64,7 +64,9 @@ upstream Zed. It is not a chronological log: the fork ships as a single version.
   toggle also adds `.agent/` to each open worktree's `.gitignore`.
 - Per-chat **browser access** toggle (globe button next to the composer) grants
   the agent the built-in browser tools. The Playwright-driven Chromium is an
-  isolated, in-memory browser, and its lifetime is now bound to the toggle:
+  isolated, in-memory browser, and the `browser` server is **on demand**: it is
+  not started when a project opens, so no Playwright or Chromium process exists
+  until a chat turns browser access on. Its lifetime is bound to the toggle:
   turning browser access off shuts the browser server down (freeing its memory)
   instead of leaving a headless Chromium running until the app exits.
 
@@ -92,6 +94,11 @@ upstream Zed. It is not a chronological log: the fork ships as a single version.
   (overridable with `MALLOC_ARENA_MAX`) rather than only via the launcher's
   environment, so the heap cannot fragment into one largely-empty arena per
   worker thread when the app is started by other means.
+- The built-in `browser` context server is on demand rather than eager: it is
+  not spawned at project open, so the baseline process tree no longer includes
+  Playwright and a headless Chromium until browser access is actually enabled in
+  a chat. This also keeps the browser server out of test and headless projects,
+  which previously started `npx @playwright/mcp` on every project.
 - `heaptrack` profiling of this fork is documented in the README's Memory
   section: the editor is ~120 MB of heap at idle, open buffers add ~2–3 MB of
   tree-sitter parse trees each, and long sessions grow mainly through wasm

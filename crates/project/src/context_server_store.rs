@@ -315,10 +315,22 @@ pub struct ContextServerStore {
     /// `maintain_servers` restart a server when its working directory changes,
     /// since the working directory is not part of `ContextServerConfiguration`.
     server_working_directories: HashMap<ContextServerId, Option<Arc<Path>>>,
+    /// On-demand servers (such as the built-in browser server) stay inert until
+    /// something explicitly requests them, so their heavy child processes are not
+    /// spawned at project open. This tracks which of them are currently wanted.
+    requested_on_demand_servers: HashSet<ContextServerId>,
     needs_server_update: bool,
     ai_disabled: bool,
     _subscriptions: Vec<Subscription>,
 }
+
+/// The id of the built-in browser context server. It runs a Playwright-driven
+/// Chromium, so it is only started while a chat has browser access enabled.
+pub const BROWSER_CONTEXT_SERVER_ID: &str = "browser";
+
+/// Servers that are never started during ordinary maintenance. They only start
+/// once something calls [`ContextServerStore::request_on_demand_server`].
+const ON_DEMAND_CONTEXT_SERVER_IDS: &[&str] = &[BROWSER_CONTEXT_SERVER_ID];
 
 pub struct ServerStatusChangedEvent {
     pub server_id: ContextServerId,
@@ -512,6 +524,7 @@ impl ContextServerStore {
             update_servers_task: None,
             context_server_factory,
             server_working_directories: HashMap::default(),
+            requested_on_demand_servers: HashSet::default(),
         };
         if maintain_server_loop && !DisableAiSettings::get_global(cx).disable_ai {
             this.available_context_servers_changed(cx);
@@ -713,6 +726,23 @@ impl ContextServerStore {
     /// worktree change to trigger maintenance.
     pub fn start_stopped_servers(&mut self, cx: &mut Context<Self>) {
         self.available_context_servers_changed(cx);
+    }
+
+    /// Requests an on-demand server to run. On-demand servers are never started
+    /// during ordinary maintenance, so they must be requested explicitly; they
+    /// keep running across maintenance passes until [`Self::release_on_demand_server`]
+    /// is called.
+    pub fn request_on_demand_server(&mut self, id: &ContextServerId, cx: &mut Context<Self>) {
+        if self.requested_on_demand_servers.insert(id.clone()) {
+            self.available_context_servers_changed(cx);
+        }
+    }
+
+    /// Stops an on-demand server and prevents maintenance from restarting it.
+    pub fn release_on_demand_server(&mut self, id: &ContextServerId, cx: &mut Context<Self>) {
+        if self.requested_on_demand_servers.remove(id) {
+            self.available_context_servers_changed(cx);
+        }
     }
 
     fn run_server(
@@ -1842,6 +1872,17 @@ impl ContextServerStore {
             for (id, config) in configured_servers {
                 let state = this.servers.get(&id);
                 let is_stopped = matches!(state, Some(ContextServerState::Stopped { .. }));
+                let is_on_demand = ON_DEMAND_CONTEXT_SERVER_IDS
+                    .iter()
+                    .any(|on_demand_id| id.0.as_ref() == *on_demand_id);
+                // On-demand servers stay inert until something requests them, so
+                // that e.g. the Playwright browser is not spawned at project open.
+                if is_on_demand && !this.requested_on_demand_servers.contains(&id) {
+                    if state.is_some() && !is_stopped {
+                        servers_to_stop.insert(id);
+                    }
+                    continue;
+                }
                 let existing_config = state.as_ref().map(|state| state.configuration());
                 let working_directory =
                     working_directory_for(&config, root_path.clone(), is_remote_project);
@@ -1872,6 +1913,7 @@ impl ContextServerStore {
                 this.stop_server(&id, inner_cx)?;
             }
             for id in servers_to_remove {
+                this.requested_on_demand_servers.remove(&id);
                 this.remove_server(&id, inner_cx)?;
             }
             anyhow::Ok(())
