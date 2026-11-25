@@ -1,8 +1,10 @@
 name: Release
 
 # Builds installers for Linux and Windows and publishes them as a GitHub
-# Release. Only the three most recent releases are kept; older ones (and their
-# tags) are pruned automatically after each publish.
+# Release. The Linux release is published as soon as the Linux build finishes;
+# the Windows installer is attached once that build completes, so Linux users do
+# not wait on the slower Windows job. Only the three most recent releases are
+# kept; older ones (and their tags) are pruned automatically after each publish.
 #
 # Cache note: GitHub scopes caches per ref. A cache saved while building a tag
 # is only restorable by that same tag, so tag-triggered releases are always a
@@ -176,9 +178,12 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  publish:
-    name: Publish release
-    needs: [prepare, linux, windows]
+  # Publishing is split so the Linux release becomes downloadable as soon as the
+  # Linux build finishes. Previously the single publish job needed the (much
+  # slower) Windows build too, so Linux users waited for Windows.
+  publish-linux:
+    name: Publish Linux release
+    needs: [prepare, linux]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
@@ -188,16 +193,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download artifacts
+      - name: Download Linux artifacts
         uses: actions/download-artifact@v4
         with:
+          pattern: 'linux-*'
           path: dist
 
       - name: Collect installer assets
         shell: bash
         run: |
           mkdir -p release-assets
-          find dist -type f \( -name '*.tar.gz' -o -name '*.gz' -o -name '*.exe' \) \
+          find dist -type f \( -name '*.tar.gz' -o -name '*.gz' \) \
             -exec cp -v {} release-assets/ \;
           ls -la release-assets
 
@@ -220,18 +226,49 @@ jobs:
           printf '%s\n' "$section" > release-body.md
           cat release-body.md
 
-      - name: Create release
+      - name: Create or update release
         shell: bash
         run: |
           tag="v$VERSION"
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" release-assets/* --clobber
-          else
-            gh release create "$tag" release-assets/* \
+          elif ! gh release create "$tag" release-assets/* \
               --title "$tag" \
-              --notes-file release-body.md
+              --notes-file release-body.md; then
+            # Another job may have created the release concurrently.
+            gh release upload "$tag" release-assets/* --clobber
           fi
 
+  publish-windows:
+    name: Publish Windows asset
+    needs: [prepare, publish-linux, windows]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-x86_64
+          path: dist
+
+      - name: Attach to existing release
+        shell: bash
+        run: |
+          tag="v$VERSION"
+          gh release upload "$tag" dist/Zed-x86_64.exe --clobber
+
+  prune:
+    name: Prune old releases
+    needs: [publish-linux, publish-windows]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
       - name: Prune old releases (keep latest 3)
         shell: bash
         run: |
