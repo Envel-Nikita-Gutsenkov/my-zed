@@ -61,6 +61,11 @@ pub struct SystemPromptTemplate<'a> {
     pub is_linux: bool,
     /// Whether sandboxed terminal commands run through WSL on Windows.
     pub is_windows: bool,
+    /// Whether the agent should maintain a persistent task log at
+    /// `.agent/TODO.md` for this chat. When `true`, the rendered prompt asks
+    /// the model to create, keep updated, and stay within size limits for
+    /// that file.
+    pub todo_log: bool,
 }
 
 impl Template for SystemPromptTemplate<'_> {
@@ -108,6 +113,7 @@ mod tests {
             sandboxing: false,
             is_linux: false,
             is_windows: false,
+            todo_log: false,
         };
         let templates = Templates::new();
         let rendered = template.render(&templates).unwrap();
@@ -115,6 +121,27 @@ mod tests {
         assert!(rendered.contains("Today's Date: 2026-01-01"));
         assert!(rendered.contains("## Fixing Diagnostics"));
         assert!(rendered.contains("test-model"));
+        assert!(!rendered.contains("## Task Log"));
+    }
+
+    #[test]
+    fn test_system_prompt_renders_task_log_section_when_enabled() {
+        let project = prompt_store::ProjectContext::default();
+        let template = SystemPromptTemplate {
+            project: &project,
+            available_tools: vec!["echo".into()],
+            model_name: Some("test-model".to_string()),
+            date: "2026-01-01".to_string(),
+            user_agents_md: None,
+            sandboxing: false,
+            is_linux: false,
+            is_windows: false,
+            todo_log: true,
+        };
+        let templates = Templates::new();
+        let rendered = template.render(&templates).unwrap();
+        assert!(rendered.contains("## Task Log"));
+        assert!(rendered.contains(".agent/TODO.md"));
     }
 
     #[test]
@@ -141,6 +168,7 @@ mod tests {
             sandboxing: false,
             is_linux: false,
             is_windows: false,
+            todo_log: false,
         };
         let templates = Templates::new();
         let rendered = template.render(&templates).unwrap();
@@ -170,6 +198,7 @@ mod tests {
             sandboxing: false,
             is_linux: false,
             is_windows: false,
+            todo_log: false,
         };
         let templates = Templates::new();
         let rendered = template.render(&templates).unwrap();
@@ -203,6 +232,7 @@ mod tests {
             sandboxing: true,
             is_linux: false,
             is_windows: false,
+            todo_log: false,
         };
         let templates = Templates::new();
         let rendered = template.render(&templates).unwrap();
@@ -246,6 +276,7 @@ mod tests {
             sandboxing: true,
             is_linux: true,
             is_windows: false,
+            todo_log: false,
         };
         let templates = Templates::new();
         let rendered = template.render(&templates).unwrap();
@@ -279,6 +310,7 @@ mod tests {
             sandboxing: true,
             is_linux: false,
             is_windows: true,
+            todo_log: false,
         };
         let templates = Templates::new();
         let rendered = template.render(&templates).unwrap();
@@ -309,6 +341,7 @@ mod tests {
             sandboxing: true,
             is_linux: false,
             is_windows: false,
+            todo_log: false,
         };
         let templates = Templates::new();
         let rendered = template.render(&templates).unwrap();
@@ -331,6 +364,7 @@ mod tests {
             sandboxing: true,
             is_linux: false,
             is_windows: false,
+            todo_log: false,
         };
         let templates = Templates::new();
         let rendered = template.render(&templates).unwrap();
@@ -351,6 +385,7 @@ mod tests {
             sandboxing: false,
             is_linux: false,
             is_windows: false,
+            todo_log: false,
         };
         let templates = Templates::new();
         let rendered = template.render(&templates).unwrap();
@@ -369,6 +404,7 @@ mod tests {
             sandboxing: false,
             is_linux: false,
             is_windows: false,
+            todo_log: false,
         };
         let templates = Templates::new();
         let rendered = template.render(&templates).unwrap();

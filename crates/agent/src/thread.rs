@@ -1974,6 +1974,10 @@ pub struct Thread {
     /// per-thread by the globe button and never persisted, so new threads start
     /// with browser access off.
     browser_enabled: bool,
+    /// Whether the agent should maintain a persistent task log in
+    /// `.agent/TODO.md`. Toggled per-thread by the checklist button and never
+    /// persisted, so new threads start with the log off.
+    todo_log_enabled: bool,
 }
 
 impl Thread {
@@ -2122,6 +2126,7 @@ impl Thread {
             sandboxed_terminal_temp_dir: None,
             sandbox_grants: Rc::new(RefCell::new(ThreadSandboxGrants::default())),
             browser_enabled: false,
+            todo_log_enabled: false,
         }
     }
 
@@ -2139,6 +2144,7 @@ impl Thread {
         self.profile_downgraded_for_restricted_workspace =
             parent.profile_downgraded_for_restricted_workspace;
         self.browser_enabled = parent.browser_enabled;
+        self.todo_log_enabled = parent.todo_log_enabled;
     }
 
     /// Whether the agent may use browser tools in this chat.
@@ -2156,6 +2162,51 @@ impl Thread {
         self.browser_enabled = enabled;
         self.refresh_turn_tools(cx);
         cx.notify();
+    }
+
+    /// Whether the agent should maintain a persistent task log in
+    /// `.agent/TODO.md` for this chat.
+    pub fn todo_log_enabled(&self) -> bool {
+        self.todo_log_enabled
+    }
+
+    /// Turns the persistent TODO log on or off for this chat. Enabling it also
+    /// adds `.agent/` to the `.gitignore` of each open worktree so the log stays
+    /// out of version control.
+    pub fn set_todo_log_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.todo_log_enabled == enabled {
+            return;
+        }
+        self.todo_log_enabled = enabled;
+        if enabled {
+            self.ignore_todo_log_in_git(cx);
+        }
+        cx.notify();
+    }
+
+    fn ignore_todo_log_in_git(&self, cx: &mut Context<Self>) {
+        let fs = self.project.read(cx).fs().clone();
+        let roots: Vec<PathBuf> = self
+            .project
+            .read(cx)
+            .visible_worktrees(cx)
+            .filter_map(|worktree| {
+                let worktree = worktree.read(cx);
+                worktree.root_dir().map(|root| root.to_path_buf())
+            })
+            .collect();
+
+        cx.background_spawn(async move {
+            for root in roots {
+                if let Err(error) = ensure_gitignore_entry(fs.as_ref(), &root, ".agent/").await {
+                    log::warn!(
+                        "failed to add .agent/ to {}/.gitignore: {error:#}",
+                        root.display()
+                    );
+                }
+            }
+        })
+        .detach();
     }
 
     fn apply_model_selection(
@@ -2524,6 +2575,9 @@ impl Thread {
             // Not persisted; browser access always starts off when a thread is
             // reloaded or reopened.
             browser_enabled: false,
+            // Not persisted; the TODO log always starts off when a thread is
+            // reloaded or reopened.
+            todo_log_enabled: false,
         }
     }
 
@@ -5345,6 +5399,7 @@ impl Thread {
             ),
             is_linux: cfg!(target_os = "linux"),
             is_windows: cfg!(target_os = "windows"),
+            todo_log: self.todo_log_enabled,
         }
         .render(&self.templates)
         .context("failed to build system prompt")
@@ -7991,6 +8046,42 @@ impl From<UserMessageContent> for acp_v2::ContentBlock {
             }
         }
     }
+}
+
+/// Ensures `gitignore_entry` is present in the `.gitignore` at `root`,
+/// creating the file if it does not exist. Best-effort: read or write
+/// failures are logged rather than surfaced, since ignoring the file is a
+/// convenience and must not block enabling the task log.
+async fn ensure_gitignore_entry(
+    fs: &dyn Fs,
+    root: &Path,
+    gitignore_entry: &str,
+) -> anyhow::Result<()> {
+    let gitignore_path = root.join(".gitignore");
+    let existing = if fs.metadata(&gitignore_path).await?.is_some() {
+        fs.load(&gitignore_path)
+            .await
+            .context("loading .gitignore")?
+    } else {
+        String::new()
+    };
+
+    let already_present = existing.lines().any(|line| line.trim() == gitignore_entry);
+    if already_present {
+        return Ok(());
+    }
+
+    let mut updated = existing;
+    if !updated.is_empty() && !updated.ends_with('\n') {
+        updated.push('\n');
+    }
+    updated.push_str(gitignore_entry);
+    updated.push('\n');
+
+    fs.atomic_write(gitignore_path, updated)
+        .await
+        .context("writing .gitignore")?;
+    Ok(())
 }
 
 #[cfg(test)]

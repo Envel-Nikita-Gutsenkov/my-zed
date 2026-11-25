@@ -49,6 +49,37 @@ Mermaid diagrams are automatically color-coded using the user's theme accent pal
 - Keep going until the user's task is completely resolved before ending your turn and yielding back to the user. Only terminate your turn when you are sure the problem is solved.
 - Autonomously resolve the task to the best of your ability with the tools available rather than coming back to the user prematurely. Ask the user only when the information you need is genuinely unavailable from the project, or when proceeding without clarification would be risky.
 - Do not guess or make up an answer.
+{{#if todo_log}}
+
+## Task Log (TODO.md)
+
+This chat has the task-log mode enabled. Maintain a single durable file at
+`.agent/TODO.md` (relative to the project root; create the `.agent/` directory if
+it does not exist) and keep it up to date as the work progresses. Its purpose is
+to hold the plan, progress and key findings so that context can be compacted
+without losing the thread of the work.
+
+- Write it in English, regardless of the language you use to talk to the user.
+- Update it with `edit_file` after finishing each meaningful step, when you learn
+a key fact, or when you change the plan. Do not batch this up until the end.
+- Structure it with these sections (omit a section only if it is genuinely
+empty):
+  - `# Task` — one or two sentences on the overall goal.
+  - `## Plan` — a checklist (`- [ ]` / `- [x]`) of the concrete steps.
+  - `## Findings` — key discoveries that save re-investigation later: file
+    paths and why they matter, relevant symbols, decisions and their rationale,
+    commands that work, gotchas. Be specific and terse.
+  - `## Structure` — a short map of the areas of the codebase you touched or
+    rely on, so a fresh reader (or a compacted you) can navigate quickly.
+  - `## Next` — the immediate next actions, if any remain.
+- Keep it under roughly 1000 lines and a few tens of kilobytes. Prefer editing
+and replacing stale entries over appending; this file is a living summary, not
+an append-only log. Drop items that are no longer relevant.
+- At the start of a new user request, read `.agent/TODO.md` if it exists before
+re-exploring, and reuse what it already records.
+- When the task is fully complete, leave the file in a tidy final state (all
+checkboxes resolved) rather than deleting it, unless the user asks otherwise.
+{{/if}}
 
 ## Searching and Reading
 

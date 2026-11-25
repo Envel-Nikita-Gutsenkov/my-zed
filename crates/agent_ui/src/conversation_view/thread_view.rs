@@ -5784,6 +5784,7 @@ impl ThreadView {
                                     .child(self.render_add_context_button(cx))
                                     .child(self.render_follow_toggle(cx))
                                     .child(self.render_browser_toggle(cx))
+                                    .child(self.render_todo_log_toggle(cx))
                                     .when(!self.is_subagent(), |this| {
                                         this.child(self.render_auto_continue_toggle(cx))
                                     })
@@ -7269,6 +7270,38 @@ impl ThreadView {
         cx: &mut Context<Self>,
     ) {
         self.toggle_browser_access(cx);
+    }
+
+    fn render_todo_log_toggle(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let native_thread = self.as_native_thread(cx);
+        let enabled = native_thread
+            .as_ref()
+            .is_some_and(|thread| thread.read(cx).todo_log_enabled());
+
+        let tooltip = if enabled {
+            "Task log is on: the agent keeps a running plan, key findings and file map in .agent/TODO.md to save context."
+        } else {
+            "Enable the task log: the agent maintains .agent/TODO.md with its plan, key findings and file map to save context."
+        };
+
+        IconButton::new("todo-log-toggle", IconName::ListTodo)
+            .icon_size(IconSize::Small)
+            .icon_color(if enabled { Color::Accent } else { Color::Muted })
+            .toggle_state(enabled)
+            .tooltip(Tooltip::text(tooltip))
+            .on_click(cx.listener(|this, _, _window, cx| {
+                this.toggle_todo_log(cx);
+            }))
+    }
+
+    fn toggle_todo_log(&mut self, cx: &mut Context<Self>) {
+        if let Some(thread) = self.as_native_thread(cx) {
+            thread.update(cx, |thread, cx| {
+                let enabled = !thread.todo_log_enabled();
+                thread.set_todo_log_enabled(enabled, cx);
+            });
+            cx.notify();
+        }
     }
 
     fn render_auto_continue_toggle(&self, cx: &mut Context<Self>) -> impl IntoElement {
