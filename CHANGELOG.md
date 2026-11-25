@@ -4,6 +4,16 @@
 based on upstream Zed `1.31.0`. This file describes how the fork differs from
 upstream Zed. It is not a chronological log: the fork ships as a single version.
 
+## 1.31.0-my.5
+
+### Fixed
+
+- Windows installers are attached to their GitHub release again. The
+  `publish-windows` and prune jobs no longer rely on a repository checkout to
+  resolve the repository, so `gh release upload` works; earlier tagged builds
+  published the Linux asset but silently failed to attach `my-zed-x86_64.exe`.
+  No application code changed compared to `1.31.0-my.4`.
+
 ## 1.31.0-my.4
 
 ### Windows Explorer integration

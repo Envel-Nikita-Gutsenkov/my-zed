@@ -245,6 +245,9 @@ jobs:
     timeout-minutes: 20
     env:
       GH_TOKEN: ${{ github.token }}
+      # This job does not check out the repository, so `gh` has no git remote to
+      # infer the repository from. Without this every `gh release` call fails.
+      GH_REPO: ${{ github.repository }}
       VERSION: ${{ needs.prepare.outputs.version }}
     steps:
       - name: Download Windows artifact
@@ -257,7 +260,15 @@ jobs:
         shell: bash
         run: |
           tag="v$VERSION"
-          gh release upload "$tag" dist/my-zed-x86_64.exe --clobber
+          ls -la dist
+          for attempt in 1 2 3; do
+            if gh release upload "$tag" dist/my-zed-x86_64.exe --clobber; then
+              exit 0
+            fi
+            echo "upload attempt $attempt failed, retrying"
+            sleep 5
+          done
+          exit 1
 
   prune:
     name: Prune old releases
@@ -267,6 +278,7 @@ jobs:
     timeout-minutes: 10
     env:
       GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
     steps:
       - name: Prune old releases (keep latest 3)
         shell: bash
