@@ -7243,7 +7243,7 @@ impl ThreadView {
             "Give the agent browser access in this chat: it can open sites and interact with them."
         };
 
-        IconButton::new("browser-toggle", IconName::Public)
+        IconButton::new("browser-toggle", IconName::ToolWeb)
             .icon_size(IconSize::Small)
             .icon_color(if enabled { Color::Accent } else { Color::Muted })
             .toggle_state(enabled)

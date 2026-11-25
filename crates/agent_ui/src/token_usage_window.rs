@@ -107,8 +107,10 @@ impl Totals {
         })
     }
 
+    /// Total processed tokens, matching how provider dashboards report usage:
+    /// prompt tokens (including cache reads and writes) plus completion tokens.
     fn total(&self) -> u64 {
-        self.input + self.output
+        self.input + self.output + self.cache_read + self.cache_write
     }
 }
 
@@ -257,88 +259,99 @@ impl TokenUsageWindow {
             by_start.insert(bucket.start, bucket);
         }
 
-        let slots: Vec<(i64, u64, u64, u64)> = (first_slot..=last_slot)
+        let slots: Vec<(i64, u64, u64, u64, u64, u64)> = (first_slot..=last_slot)
             .map(|slot| {
                 let start = slot * bucket_seconds;
-                let (input, output, saved) = by_start
+                let (input, output, cache_read, cache_write, saved) = by_start
                     .get(&start)
                     .map(|bucket| {
                         (
                             bucket.input_tokens,
                             bucket.output_tokens,
+                            bucket.cache_read_tokens,
+                            bucket.cache_write_tokens,
                             bucket.saved_tokens,
                         )
                     })
-                    .unwrap_or((0, 0, 0));
-                (start, input, output, saved)
+                    .unwrap_or((0, 0, 0, 0, 0));
+                (start, input, output, cache_read, cache_write, saved)
             })
             .collect();
 
         let peak = slots
             .iter()
-            .map(|(_, input, output, saved)| (input + output).max(*saved))
+            .map(|(_, input, output, cache_read, cache_write, saved)| {
+                (input + output + cache_read + cache_write).max(*saved)
+            })
             .max()
             .unwrap_or(0)
             .max(1);
         let has_data = slots
             .iter()
-            .any(|(_, input, output, saved)| input + output + saved > 0);
+            .any(|(_, input, output, cache_read, cache_write, saved)| {
+                input + output + cache_read + cache_write + saved > 0
+            });
 
         let chart_height = 170.0_f32;
         let bar_width = 9.0_f32;
 
-        let bars = slots.iter().map(|(start, input, output, saved)| {
-            let total = input + output;
-            let total_height = (total as f32 / peak as f32) * chart_height;
-            let saved_height = (*saved as f32 / peak as f32) * chart_height;
-            let tooltip = format!(
-                "{} — {}\ninput: {}\noutput: {}\nsaved: {}",
-                fmt_time(*start, self.range),
-                fmt_time(start + bucket_seconds, self.range),
-                format_tokens(*input),
-                format_tokens(*output),
-                format_tokens(*saved),
-            );
+        let bars = slots
+            .iter()
+            .map(|(start, input, output, cache_read, cache_write, saved)| {
+                let total = input + output + cache_read + cache_write;
+                let total_height = (total as f32 / peak as f32) * chart_height;
+                let saved_height = (*saved as f32 / peak as f32) * chart_height;
+                let tooltip = format!(
+                    "{} — {}\ninput: {}\noutput: {}\ncache read: {}\ncache write: {}\ntotal: {}\nsaved: {}",
+                    fmt_time(*start, self.range),
+                    fmt_time(start + bucket_seconds, self.range),
+                    format_tokens(*input),
+                    format_tokens(*output),
+                    format_tokens(*cache_read),
+                    format_tokens(*cache_write),
+                    format_tokens(total),
+                    format_tokens(*saved),
+                );
 
-            v_flex()
-                .flex_1()
-                .min_w_0()
-                .h_full()
-                .items_center()
-                .justify_end()
-                .id(gpui::ElementId::Name(
-                    format!("token-bucket-{start}").into(),
-                ))
-                .tooltip(ui::Tooltip::text(tooltip))
-                .child(
-                    h_flex()
-                        .items_end()
-                        .justify_center()
-                        .gap_0p5()
-                        .child(
-                            div()
-                                .w(px(bar_width))
-                                .h(px(if total > 0 {
-                                    total_height.max(2.0)
-                                } else {
-                                    0.0
-                                }))
-                                .rounded_t_sm()
-                                .bg(status.info),
-                        )
-                        .child(
-                            div()
-                                .w(px(bar_width))
-                                .h(px(if *saved > 0 {
-                                    saved_height.max(2.0)
-                                } else {
-                                    0.0
-                                }))
-                                .rounded_t_sm()
-                                .bg(status.created),
-                        ),
-                )
-        });
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .items_center()
+                    .justify_end()
+                    .id(gpui::ElementId::Name(
+                        format!("token-bucket-{start}").into(),
+                    ))
+                    .tooltip(ui::Tooltip::text(tooltip))
+                    .child(
+                        h_flex()
+                            .items_end()
+                            .justify_center()
+                            .gap_0p5()
+                            .child(
+                                div()
+                                    .w(px(bar_width))
+                                    .h(px(if total > 0 {
+                                        total_height.max(2.0)
+                                    } else {
+                                        0.0
+                                    }))
+                                    .rounded_t_sm()
+                                    .bg(status.info),
+                            )
+                            .child(
+                                div()
+                                    .w(px(bar_width))
+                                    .h(px(if *saved > 0 {
+                                        saved_height.max(2.0)
+                                    } else {
+                                        0.0
+                                    }))
+                                    .rounded_t_sm()
+                                    .bg(status.created),
+                            ),
+                    )
+            });
 
         let legend = |color: gpui::Hsla, text: &'static str| {
             h_flex()
@@ -364,7 +377,7 @@ impl TokenUsageWindow {
                     .child(
                         h_flex()
                             .gap_3()
-                            .child(legend(status.info, "input + output"))
+                            .child(legend(status.info, "used (incl. cache)"))
                             .child(legend(status.created, "saved")),
                     ),
             )
