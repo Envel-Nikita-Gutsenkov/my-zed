@@ -4,6 +4,16 @@
 based on upstream Zed `1.31.0`. This file describes how the fork differs from
 upstream Zed. It is not a chronological log: the fork ships as a single version.
 
+## 1.31.0-my.4
+
+### Windows Explorer integration
+
+- The installer now registers its own file associations, ProgIDs, context-menu
+  keys and COM class instead of reusing the identifiers of upstream Zed. Before
+  this, installing my zed could take over the "Open with Zed" Explorer entry
+  and file-type associations owned by a regular Zed install, and the right-click
+  entry could show the wrong title.
+
 ## 1.31.0-my.3
 
 ### Windows release build fixes

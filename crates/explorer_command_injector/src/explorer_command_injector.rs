@@ -44,7 +44,7 @@ struct ExplorerCommandInjector;
 impl IExplorerCommand_Impl for ExplorerCommandInjector_Impl {
     fn GetTitle(&self, _: Ref<IShellItemArray>) -> Result<windows_core::PWSTR> {
         let command_description =
-            retrieve_command_description().unwrap_or(HSTRING::from("Open with Zed"));
+            retrieve_command_description().unwrap_or(HSTRING::from("Open with my zed"));
         unsafe { SHStrDupW(&command_description) }
     }
 
@@ -128,7 +128,10 @@ impl IClassFactory_Impl for ExplorerCommandInjectorFactory_Impl {
 }
 
 const MODULE_ID: GUID = cfg_select! {
-    feature = "stable" => { GUID::from_u128(0x6a1f6b13_3b82_48a1_9e06_7bb0a6d0bffd) },
+    // Fork-specific CLSID: a packaged COM server must not share a class id with
+    // another package, or installing this build would collide with a regular
+    // Zed install's Explorer integration.
+    feature = "stable" => { GUID::from_u128(0x2f5c8a41_9b7d_4c3e_a1f6_8d0e5b47c293) },
     feature = "preview" => { GUID::from_u128(0xaf8e85ea_fb20_4db2_93cf_56513c1ec697) },
     feature = "nightly" => { GUID::from_u128(0x266f2cfe_1653_42af_b55c_fe3590c83871) },
     _ => { GUID::from_u128(0x685f4d49_6718_4c55_b271_ebb5c6a48d6f) },
@@ -180,7 +183,9 @@ fn get_zed_exe_path() -> Option<String> {
 #[inline]
 fn retrieve_command_description() -> Result<HSTRING> {
     const REG_PATH: &str = cfg_select! {
-        feature = "stable" => { r#"Software\Classes\ZedContextMenu"# },
+        // The fork uses its own ProgID/context-menu keys so it never overwrites
+        // the ones a stock Zed install owns.
+        feature = "stable" => { r#"Software\Classes\MyZedContextMenu"# },
         feature = "preview" => { r#"Software\Classes\ZedPreviewContextMenu"# },
         feature = "nightly" => { r#"Software\Classes\ZedNightlyContextMenu"# },
         _ => { r#"Software\Classes\ZedDevContextMenu"# },
