@@ -11,6 +11,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const PENDING_MIGRATION_FILE: &str = ".migrate-from-stable";
 
+/// Directory name this fork uses for its data on Windows (see
+/// `paths::APP_DIR_NAME_WINDOWS`).
+const FORK_DIR_NAME: &str = "my-zed";
+
 /// Asset directories that can be copied verbatim when the destination does not
 /// already exist. Most are already symlinked to the stock install, so they are
 /// typically skipped.
@@ -33,14 +37,25 @@ fn pending_marker_path() -> PathBuf {
 
 /// Resolves the data directory of a regular (non-fork) Zed install.
 ///
-/// The fork runs with `XDG_DATA_HOME=$HOME/.local/share/my-zed`, so its own
-/// data directory is `$XDG_DATA_HOME/zed` and the stock install lives one level
-/// up at `$XDG_DATA_HOME/../zed`.
+/// On Linux the fork runs with `XDG_DATA_HOME=$HOME/.local/share/my-zed`, so its
+/// own data directory is `$XDG_DATA_HOME/zed` and the stock install lives one
+/// level up at `$XDG_DATA_HOME/../zed`. On Windows the fork's data directory is
+/// `%LOCALAPPDATA%\my-zed`, so the stock install is the sibling `%LOCALAPPDATA%\Zed`.
 pub fn stock_data_dir() -> Option<PathBuf> {
     let own = paths::data_dir();
-    let base = own.parent()?;
-    if base.file_name().and_then(|name| name.to_str()) == Some("my-zed") {
-        Some(base.parent()?.join("zed"))
+    let own_name = own.file_name().and_then(|name| name.to_str());
+
+    if own_name.is_some_and(|name| name.eq_ignore_ascii_case(FORK_DIR_NAME)) {
+        // Windows: %LOCALAPPDATA%\my-zed -> %LOCALAPPDATA%\Zed
+        Some(own.parent()?.join(paths::APP_NAME))
+    } else if own
+        .parent()
+        .and_then(|base| base.file_name())
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name == FORK_DIR_NAME)
+    {
+        // Linux: .../my-zed/zed -> .../zed
+        Some(own.parent()?.parent()?.join("zed"))
     } else {
         Some(own.clone())
     }

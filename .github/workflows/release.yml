@@ -23,7 +23,7 @@ on:
       channel:
         description: "Release channel baked into the binary"
         required: false
-        default: "dev"
+        default: "stable"
         type: choice
         options:
           - dev
@@ -65,7 +65,7 @@ jobs:
         run: |
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
             version="${GITHUB_REF_NAME#v}"
-            channel="dev"
+            channel="stable"
           else
             version="${{ inputs.version }}"
             channel="${{ inputs.channel }}"
@@ -75,8 +75,8 @@ jobs:
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "channel=${channel:-dev}" >> "$GITHUB_OUTPUT"
-          echo "Releasing $version on channel ${channel:-dev}"
+          echo "channel=${channel:-stable}" >> "$GITHUB_OUTPUT"
+          echo "Releasing $version on channel ${channel:-stable}"
 
   linux:
     name: Build Linux (${{ matrix.arch }})
@@ -103,7 +103,7 @@ jobs:
             libasound2-dev libfontconfig-dev libgit2-dev libglib2.0-dev
             libssl-dev libva-dev libvulkan1 libwayland-dev libx11-xcb-dev
             libxkbcommon-x11-dev libzstd-dev libsqlite3-dev
-            musl-tools musl-dev jq gettext-base elfutils
+            jq gettext-base elfutils
           version: 1.0
 
       - name: Install Linux dependencies
@@ -135,7 +135,6 @@ jobs:
           name: linux-${{ matrix.arch }}
           path: |
             target/release/zed-linux-${{ matrix.arch }}.tar.gz
-            target/zed-remote-server-linux-${{ matrix.arch }}.gz
           if-no-files-found: error
           retention-days: 7
 
@@ -174,7 +173,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: windows-x86_64
-          path: target/Zed-x86_64.exe
+          path: target/my-zed-x86_64.exe
           if-no-files-found: error
           retention-days: 7
 
@@ -258,7 +257,7 @@ jobs:
         shell: bash
         run: |
           tag="v$VERSION"
-          gh release upload "$tag" dist/Zed-x86_64.exe --clobber
+          gh release upload "$tag" dist/my-zed-x86_64.exe --clobber
 
   prune:
     name: Prune old releases

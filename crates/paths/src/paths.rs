@@ -17,6 +17,16 @@ pub const EDITORCONFIG_NAME: &str = ".editorconfig";
 /// Forks should change this to avoid colliding with Zed's user data.
 pub const APP_NAME: &str = "Zed";
 
+/// Directory name used for this fork's data, state and cache on Windows.
+///
+/// `APP_NAME` has to stay `Zed` because the binary-name assertion in
+/// `crates/zed/src/main.rs` and the shared config directory depend on it. On
+/// Windows the data/state/cache directories are derived from `APP_NAME`, which
+/// would put the fork in the same folder as a stock Zed install. Using a
+/// separate name here keeps the databases and chats apart while settings still
+/// live in the shared `%APPDATA%\Zed` config directory.
+pub const APP_DIR_NAME_WINDOWS: &str = "my-zed";
+
 /// Lowercased form of [`APP_NAME`], for use in XDG-style paths on
 /// Linux/FreeBSD and the macOS `~/.config` fallback.
 pub const APP_NAME_LOWERCASE: &str = {
@@ -159,7 +169,7 @@ pub fn data_dir() -> &'static PathBuf {
         } else if cfg!(target_os = "windows") {
             dirs::data_local_dir()
                 .expect("failed to determine LocalAppData directory")
-                .join(APP_NAME)
+                .join(APP_DIR_NAME_WINDOWS)
         } else {
             config_dir().clone() // Fallback
         }
@@ -184,7 +194,7 @@ pub fn state_dir() -> &'static PathBuf {
             // Windows
             return dirs::data_local_dir()
                 .expect("failed to determine LocalAppData directory")
-                .join(APP_NAME);
+                .join(APP_DIR_NAME_WINDOWS);
         }
     })
 }
@@ -202,7 +212,7 @@ pub fn temp_dir() -> &'static PathBuf {
         if cfg!(target_os = "windows") {
             return dirs::cache_dir()
                 .expect("failed to determine LocalAppData directory")
-                .join(APP_NAME);
+                .join(APP_DIR_NAME_WINDOWS);
         }
 
         if cfg!(any(target_os = "linux", target_os = "freebsd")) {

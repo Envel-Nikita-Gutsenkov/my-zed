@@ -293,18 +293,22 @@ function BuildInstaller {
     $issFilePath = "$innoDir\zed.iss"
     switch ($channel) {
         "stable" {
-            $appId = "{{2DB0DA96-CA55-49BB-AF4F-64AF36A86712}"
+            # Fork-specific identity so the installer installs my-zed alongside a
+            # stock Zed install instead of replacing it: unique AppId, install
+            # directory, registry value, AUMID and single-instance mutex.
+            $appId = "{{A7E3B2C1-9D4F-4E6A-B8C2-5F1D0A3E7B94}"
             $appIconName = "app-icon"
-            $appName = "Zed"
-            $appDisplayName = "Zed"
-            $appSetupName = "Zed-$Architecture"
-            # The mutex name here should match the mutex name in crates\zed\src\zed\windows_only_instance.rs
-            $appMutex = "Zed-Stable-Instance-Mutex"
+            $appName = "my-zed"
+            $appDisplayName = "my zed"
+            $appSetupName = "my-zed-$Architecture"
+            # Must match `app_identifier()` + "-Instance-Mutex" in
+            # crates\zed\src\zed\windows_only_instance.rs (stable -> MyZed-Editor-Stable).
+            $appMutex = "MyZed-Editor-Stable-Instance-Mutex"
             $appExeName = "Zed"
-            $regValueName = "Zed"
-            $appUserId = "ZedIndustries.Zed"
-            $appShellNameShort = "Z&ed"
-            $appAppxFullName = "ZedIndustries.Zed_1.0.0.0_neutral__japxn1gcva8rg"
+            $regValueName = "MyZed"
+            $appUserId = "dev.myzed.MyZed"
+            $appShellNameShort = "my &zed"
+            $appAppxFullName = "MyZed.Editor_1.0.0.0_neutral__japxn1gcva8rg"
         }
         "preview" {
             $appId = "{{F70E4811-D0E2-4D88-AC99-D63752799F95}"

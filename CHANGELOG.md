@@ -4,6 +4,28 @@
 based on upstream Zed `1.31.0`. This file describes how the fork differs from
 upstream Zed. It is not a chronological log: the fork ships as a single version.
 
+## 1.31.0-my.3
+
+### Windows release build fixes
+
+- Tag-triggered releases are now built on the `stable` channel, so the Windows
+  installer reports itself as `my zed` (not `my zed Dev`) and behaves like a
+  release build. Previously every tagged build hardcoded `dev`.
+- On Windows the app now stores its data in `%LOCALAPPDATA%\my-zed` instead of
+  `%LOCALAPPDATA%\Zed`, so it no longer shares databases and chats with a
+  regular Zed install. Settings, keymaps and themes still live in the shared
+  `%APPDATA%\Zed` config directory, and API keys are read from the Windows
+  Credential Manager that regular Zed already populated, so both carry over
+  without any extra steps.
+- "Import from Zed" now works on Windows: it imports chats, workspace state and
+  assets from `%LOCALAPPDATA%\Zed` into the fork's own data directory.
+
+### Smaller downloads and faster builds
+
+- Linux releases no longer build or bundle the musl `remote-server` binary, so
+  the Linux build is faster and the download smaller. Self-hosted remote
+  servers can be fetched separately when needed.
+
 ## 1.31.0-my.2
 
 ### Memory fixes
