@@ -44,15 +44,19 @@ queue. Ships as a separate app ("my zed") that reuses the existing Zed config.
 - [x] Wasm linear-memory reclamation (`extension_host`): a `ResourceLimiter`
       records each extension's linear-memory high-water mark and caps it at
       512 MiB; a background task (every 2 min) recycles any extension past
-      96 MiB (+32 MiB since last recycle) via the existing modified-extension
-      reload path, freeing linear memory that otherwise only grows until restart.
-      Unit test `test_wasm_memory_limiter_records_and_caps_growth`.
+      96 MiB, at most once per 30 min cooldown, via the existing
+      modified-extension reload path, freeing linear memory that otherwise
+      only grows until restart. Unit test
+      `test_wasm_memory_limiter_records_and_caps_growth`.
 
 ## Active tasks
 - [x] CHANGELOG.md.
-- [x] Local commit.
-- [x] Release build with `--profile release-lite` and install a separate copy
-      named "my zed" that reuses `~/.config/zed` (do not touch current Zed).
+- [x] Local commit + push to origin/main.
+- [x] Pushed both fixes; the build/test is left to GitHub CI (ci.yml runs on
+      push to main: fmt, `cargo check -p zed`, and unit tests).
+- [ ] Release installer build is triggered manually via the Release workflow
+      (`workflow_dispatch`); `gh` is not authenticated here so it must be run
+      by the user (or after `gh auth login`).
 
 ## Install details
 - Binary: `~/.local/my-zed.app/bin/my-zed` (stripped `release-lite` build).
