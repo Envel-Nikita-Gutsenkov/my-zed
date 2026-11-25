@@ -25,7 +25,9 @@ self-updates to upstream.
   hidden and the build cannot replace itself with upstream Zed.
 - **Long-running chats.** Age/count based chat maintenance, message queue that
   survives restarts, per-chat Auto mode, and a token usage statistics window
-  whose totals include cached tokens.
+  whose totals include cached tokens. With Auto mode on, routine tool
+  confirmation prompts are answered automatically, so the agent keeps working
+  instead of stopping for a click.
 - **Task log.** A per-chat Task Log toggle keeps a running `.agent/TODO.md` in
   the project (plan, key findings, file map, in English, roughly 1000 lines) so
   long tasks keep their thread across context compaction; `.agent/` is added to

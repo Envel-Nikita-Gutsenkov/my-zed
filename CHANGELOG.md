@@ -50,7 +50,11 @@ upstream Zed. It is not a chronological log: the fork ships as a single version.
 - The queue is persisted and survives a crash or restart; a restored queue
   starts paused.
 - Auto mode is per chat, persisted, marked in the chat list, and hidden for
-  subagent views.
+  subagent views. While Auto mode is on, routine tool permission prompts (the
+  settings-driven "confirm" kind) are resolved as "allow once" instead of
+  waiting for a click; disabled tools and explicit deny rules are still
+  enforced, and prompts that require choosing between actions (for example run
+  sandboxed vs. unsandboxed) still ask.
 - Per-chat **Task Log** toggle (checklist button next to the composer). When
   on, the agent maintains a running `.agent/TODO.md` in the project root with
   its plan, key findings and a short file map, written in English and kept to

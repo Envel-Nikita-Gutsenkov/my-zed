@@ -1,9 +1,10 @@
 use acp_thread::{
     AcpThread, AcpThreadEvent, AgentThreadEntry, AssistantMessage, AssistantMessageChunk,
-    AuthRequired, ElicitationEntryId, ElicitationStatus, ElicitationStore, ForegroundActivity,
-    LoadError, MaxOutputTokensError, MentionUri, PermissionOptionChoice, PermissionOptions,
-    PermissionPattern, PermissionRequest, PermissionRequestId, ProtocolErrorInfo, RetryStatus,
-    SelectedPermissionOutcome, ThreadStatus, ToolCall, ToolCallContent, ToolCallStatus,
+    AuthRequired, AuthorizationKind, ElicitationEntryId, ElicitationStatus, ElicitationStore,
+    ForegroundActivity, LoadError, MaxOutputTokensError, MentionUri, PermissionOptionChoice,
+    PermissionOptions, PermissionPattern, PermissionRequest, PermissionRequestId,
+    ProtocolErrorInfo, RetryStatus, SelectedPermissionOutcome, ThreadStatus, ToolCall,
+    ToolCallContent, ToolCallStatus,
 };
 use acp_thread::{AgentConnection, Plan, PlanContent};
 use action_log::{ActionLog, ActionLogTelemetry, DiffStats};
@@ -304,20 +305,23 @@ pub(crate) struct Conversation {
 
 impl Conversation {
     pub fn register_thread(&mut self, thread: Entity<AcpThread>, cx: &mut Context<Self>) {
-        let thread_state = thread.read(cx);
-        let session_id = thread_state.session_id().clone();
-        for request in thread_state.pending_permission_requests() {
-            self.add_permission_request(&session_id, &request.id);
-        }
+        let session_id = thread.read(cx).session_id().clone();
+        let pending_requests: Vec<PermissionRequestId> = thread
+            .read(cx)
+            .pending_permission_requests()
+            .map(|request| request.id)
+            .collect();
 
         let subscription = cx.subscribe(&thread, {
             let session_id = session_id.clone();
-            move |this, _thread, event, cx| {
+            move |this, thread, event, cx| {
                 match event {
                     AcpThreadEvent::NoticesUpdated => return,
                     AcpThreadEvent::ToolAuthorizationRequested(id) => {
-                        this.add_permission_request(&session_id, id);
-                        cx.notify();
+                        if !this.try_auto_approve_permission(&session_id, &thread, *id, cx) {
+                            this.add_permission_request(&session_id, id);
+                            cx.notify();
+                        }
                     }
                     AcpThreadEvent::ToolAuthorizationReceived(id) => {
                         this.permission_selections.remove(id);
@@ -370,7 +374,18 @@ impl Conversation {
             }
         });
         self.subscriptions.push(subscription);
-        self.threads.insert(session_id, thread);
+        self.threads.insert(session_id.clone(), thread.clone());
+
+        // Resolve any permission requests that were already pending before the
+        // thread was registered (for example when a running thread is reopened).
+        // This has to happen after the thread is in `self.threads`, since
+        // authorizing a request looks the thread up by session id.
+        for request_id in pending_requests {
+            if !self.try_auto_approve_permission(&session_id, &thread, request_id, cx) {
+                self.add_permission_request(&session_id, &request_id);
+            }
+        }
+
         cx.notify();
     }
 
@@ -461,6 +476,51 @@ impl Conversation {
             .get(session_id)?
             .iter()
             .find_map(|id| self.permission_request(session_id, *id, cx))
+    }
+
+    /// Under auto-continue ("auto mode") the agent should not stop to ask the
+    /// user to confirm routine, reversible steps. Resolve an incoming legacy
+    /// permission grant as "allow once" so the turn keeps moving instead of
+    /// waiting on a click. Only `PermissionGrant` requests are auto-resolved:
+    /// `ActionChoice` requests (for example "run sandboxed vs. run unsandboxed"
+    /// or "save vs. discard") still need an explicit pick, and generic
+    /// (non-legacy) permission requests keep their own interactive UI.
+    /// Hard denials never reach this point, so they remain enforced.
+    fn try_auto_approve_permission(
+        &mut self,
+        session_id: &acp_v2::SessionId,
+        thread: &Entity<AcpThread>,
+        request_id: PermissionRequestId,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let auto_continue = ThreadMetadataStore::try_global(cx).is_some_and(|store| {
+            store
+                .read(cx)
+                .entry_by_session(session_id)
+                .is_some_and(|metadata| metadata.auto_continue)
+        });
+        if !auto_continue {
+            return false;
+        }
+
+        let outcome = {
+            let Some(request) = thread.read(cx).permission_request(request_id) else {
+                return false;
+            };
+            if request.legacy_kind() != Some(AuthorizationKind::PermissionGrant) {
+                return false;
+            }
+            let Some(options) = request.legacy_options() else {
+                return false;
+            };
+            let Some(outcome) = resolve_outcome_from_selection(options, None, true) else {
+                return false;
+            };
+            outcome
+        };
+
+        self.authorize_permission_request(session_id.clone(), request_id, outcome, cx);
+        true
     }
 
     fn pending_permission_request<'a>(
