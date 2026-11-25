@@ -8097,6 +8097,67 @@ mod tests {
     use std::sync::Arc;
 
     #[gpui::test]
+    async fn test_ensure_gitignore_entry_creates_file(cx: &mut TestAppContext) {
+        use fs::FakeFs;
+
+        let fs = FakeFs::new(cx.executor());
+        let root = std::path::Path::new("/project");
+        fs.insert_tree(root, json!({})).await;
+
+        ensure_gitignore_entry(fs.as_ref(), root, ".agent/")
+            .await
+            .expect("writing a fresh .gitignore should succeed");
+
+        let contents = fs
+            .load(&root.join(".gitignore"))
+            .await
+            .expect("the .gitignore should now exist");
+        assert_eq!(contents, ".agent/\n");
+    }
+
+    #[gpui::test]
+    async fn test_ensure_gitignore_entry_appends_without_clobbering(cx: &mut TestAppContext) {
+        use fs::FakeFs;
+
+        let fs = FakeFs::new(cx.executor());
+        let root = std::path::Path::new("/project");
+        fs.insert_tree(root, json!({ "target": null })).await;
+        fs.insert_file(root.join(".gitignore"), b"/target\n/tmp".to_vec())
+            .await;
+
+        ensure_gitignore_entry(fs.as_ref(), root, ".agent/")
+            .await
+            .expect("appending to an existing .gitignore should succeed");
+
+        let contents = fs
+            .load(&root.join(".gitignore"))
+            .await
+            .expect("the .gitignore should still exist");
+        assert_eq!(contents, "/target\n/tmp\n.agent/\n");
+    }
+
+    #[gpui::test]
+    async fn test_ensure_gitignore_entry_is_idempotent(cx: &mut TestAppContext) {
+        use fs::FakeFs;
+
+        let fs = FakeFs::new(cx.executor());
+        let root = std::path::Path::new("/project");
+        fs.insert_tree(root, json!({ "target": null })).await;
+        fs.insert_file(root.join(".gitignore"), b"/target\n.agent/\n".to_vec())
+            .await;
+
+        ensure_gitignore_entry(fs.as_ref(), root, ".agent/")
+            .await
+            .expect("a second call should succeed");
+
+        let contents = fs
+            .load(&root.join(".gitignore"))
+            .await
+            .expect("the .gitignore should still exist");
+        assert_eq!(contents, "/target\n.agent/\n");
+    }
+
+    #[gpui::test]
     async fn test_tool_call_events_preserve_opaque_id_storage(cx: &mut TestAppContext) {
         let storage: Arc<str> = Arc::from("  call/雪:\"quoted\"\\opaque  ");
         let tool_call_id = acp_v2::ToolCallId::new(storage.clone());
