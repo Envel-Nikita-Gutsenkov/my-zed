@@ -395,7 +395,15 @@ impl ThreadView {
                 self.spawn_auto_stop_watcher(window, cx);
             }
             Err(error) => {
-                self.show_voice_toast(format!("Could not start recording: {error:#}"), true, cx);
+                self.show_voice_toast(
+                    format!(
+                        "Could not start recording: {error:#}. Another application may be using \
+                         the microphone, or a different input device can be picked in \
+                         Settings → Voice Input and in the `voice_input.device` setting."
+                    ),
+                    true,
+                    cx,
+                );
             }
         }
     }

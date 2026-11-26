@@ -194,6 +194,21 @@ fn cloud_section(
     let rows = CLOUD_PRESETS.iter().map(|preset| {
         let selected = preset.id == selected_provider;
         let provider_id = preset.id;
+        let key_status = if settings
+            .cloud()
+            .api_key
+            .as_deref()
+            .is_some_and(|key| !key.trim().is_empty())
+        {
+            "set in settings".to_string()
+        } else if std::env::var(preset.api_key_env).is_ok_and(|value| !value.is_empty()) {
+            format!("found in {}", preset.api_key_env)
+        } else {
+            format!(
+                "missing — set {} or `voice_input.cloud.api_key`",
+                preset.api_key_env
+            )
+        };
         let mut row = h_flex()
             .w_full()
             .px_3()
@@ -208,12 +223,9 @@ fn cloud_section(
                     .gap_1()
                     .child(Label::new(preset.name).size(LabelSize::Default))
                     .child(
-                        Label::new(format!(
-                            "Model: {} · API key: {}",
-                            preset.model, preset.api_key_env
-                        ))
-                        .size(LabelSize::XSmall)
-                        .color(Color::Muted),
+                        Label::new(format!("Model: {} · API key: {key_status}", preset.model))
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted),
                     ),
             );
 
@@ -462,7 +474,7 @@ fn render_model_row(
                     )
                     .child(ProgressBar::new(
                         SharedString::from(format!("voice-model-progress-{}", model.id)),
-                        state.fraction() * 1.0,
+                        state.fraction(),
                         1.0,
                         cx,
                     ))
