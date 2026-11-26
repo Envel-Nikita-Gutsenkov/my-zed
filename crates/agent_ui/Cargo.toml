@@ -113,6 +113,7 @@ unicode-script.workspace = true
 unicode-segmentation.workspace = true
 url.workspace = true
 util.workspace = true
+voice_input.workspace = true
 uuid.workspace = true
 watch.workspace = true
 workspace.workspace = true

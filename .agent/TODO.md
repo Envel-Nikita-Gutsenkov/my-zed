@@ -1,99 +1,46 @@
-# my-zed work TODO
+# Task
 
-Goal: a personal, lightweight Zed build with strong token-saving defaults, no
-mandatory cloud account / telemetry, resource limits, and a persisted message
-queue. Ships as a separate app ("my zed") that reuses the existing Zed config.
+Add dictation (voice input) to the agent chat in the `my-zed` fork: a mic button
+in the composer, settings for an OpenAI-compatible cloud API and for local
+models. Cloud default is OpenRouter `whisper-large-v3-turbo` with cheapest-provider
+routing (or a forced provider); local supports Parakeet and Whisper models.
 
-## Done
-- [x] `tool_output_token_limit` setting (default 30000), applied per tool result.
-- [x] `token_savings` settings block with many independent toggles.
-- [x] Token-saving passes in `agent/src/thread.rs` (truncate tool output, drop
-      old ephemeral tool output, dedupe repeats, strip ANSI, drop old images,
-      keep latest read per path, omit old tool-use inputs, total token budget).
-- [x] Defaults in `assets/settings/default.json` (auto_compact 100k, thinking
-      collapsed, telemetry off, auto_update off, sign-in hidden).
-- [x] Auto-continue mode ("ALL DONE") + composer toggle.
-- [x] Message metadata: per-turn timestamp in thread controls.
-- [x] Queued messages: reorder with arrow buttons.
-- [x] Queued messages: numbered badge instead of plain dot.
-- [x] Persist queued messages in the SQLite KVP store so crash/restart does not
-      lose them.
-- [x] Auto-shrink / thread maintenance: age-based and count-based pruning of
-      stored threads plus dropping the oldest messages of oversized threads.
-      All limits are settings (`agent.thread_maintenance`).
-- [x] `resources` settings block + resource monitor status-bar item with a mini
-      CPU graph and memory readout, sampled on a configurable timer.
-- [x] Configurable log file size cap (`resources.log_file_size_limit_mb`).
-- [x] Fast, low-memory build profiles (`release-lite`, `build-fast`).
-- [x] Rename to "my zed" (display names, app ids, menus, bundle script).
-- [x] Build verified with `cargo check -p settings_content -p zlog -p agent_ui
-      -p agent -p zed`.
-- [x] Token usage statistics window (input/output/total, "saved by trimming",
-      cache read/write) with time-range filters and a per-bucket bar chart.
-      Events persist in `token_usage_events` with a 90-day retention prune.
-- [x] Open the stats window from a toolbar button and from the command palette
-      (`agent::OpenTokenUsageStats`).
-- [x] Local `dev` build version string includes the short commit hash.
-- [x] Windows installer GitHub Actions workflow (manual `workflow_dispatch`
-      only). Not buildable from Linux; needs Actions enabled on the repo.
-- [x] Browser context server is now **on demand** (`project/src/context_server_store.rs`):
-      the built-in `browser` server (`npx @playwright/mcp`) is no longer started
-      at project open, so no Playwright/Chromium process exists until a chat
-      enables browser access. `request_on_demand_server` /
-      `release_on_demand_server` drive it; tests no longer spawn `npx`.
-- [x] Wasm linear-memory reclamation (`extension_host`): a `ResourceLimiter`
-      records each extension's linear-memory high-water mark and caps it at
-      512 MiB; a background task (every 2 min) recycles any extension past
-      96 MiB, at most once per 30 min cooldown, via the existing
-      modified-extension reload path, freeing linear memory that otherwise
-      only grows until restart. Unit test
-      `test_wasm_memory_limiter_records_and_caps_growth`.
+## Plan
 
-## Active tasks
-- [x] CHANGELOG.md.
-- [x] Local commit + push to origin/main.
-- [x] Pushed both fixes; the build/test is left to GitHub CI (ci.yml runs on
-      push to main: fmt, `cargo check -p zed`, and unit tests).
-- [x] Added `## 1.31.0-my.2` CHANGELOG section documenting the two memory fixes
-      (commit `0107d17`), pushed to main.
-- [x] Pushed tag `v1.31.0-my.2` -> triggers `.github/workflows/release.yml`
-      (Linux + Windows build, then publish). Release run created 2026-11-25T14:53Z.
-      Building: `zed-linux-x86_64.tar.gz`.
-- [ ] Poll release run until Linux asset is published, download it, and replace
-      `~/.local/my-zed.app/bin/my-zed` with the new binary; verify mtime/hash.
+- [x] `settings_content`: `VoiceInputSettingsContent` + `voice_input` field
+- [x] `crates/voice_input` crate: `wav`, `recorder`, `catalog`, `transcribe`,
+      `local`, `settings`, lib root
+- [x] Workspace `Cargo.toml`: member + workspace dep
+- [x] `settings` crate `vscode_import.rs` initializer
+- [x] `agent_ui` integration: `ToggleVoiceInput`, dep, mic button + menu,
+      chunked async pipeline, retry
+- [x] `zed` needs no change (`agent_ui::init` calls `voice_input::init`)
+- [x] keybinding `ctrl-alt-m` in linux/windows/macos keymaps
+- [x] Robustness: `split_and_encode`, `finish_samples`, chunked streaming insert,
+      cross-chunk prompt context, audio recovery + retry
+- [x] Removed unimplemented `activation` knob (no dead settings)
+- [x] Tests: wav chunking, prompt context, settings defaults/overrides
+- [x] `cargo test -p voice_input -p settings_content` pass
+- [x] `cargo clippy -p voice_input` clean; `cargo clippy -p agent_ui --lib` clean
+- [x] `cargo fmt --all`
+- [x] CHANGELOG `## 1.31.0-my.6`
+- [ ] Commit, push, tag `v1.31.0-my.6`, monitor CI, install artifact
 
-## Release / install state
-- GitHub release `v1.31.0-my.1` (2026-11-23) is STALE (predates both fixes).
-- Installed binary `~/.local/my-zed.app/bin/my-zed` mtime 2026-11-25 13:27 +0300
-  also predates the fixes (14:19 and 16:15) -> does NOT contain them.
-- New release to install once the tag build finishes: `v1.31.0-my.2`, asset
-  `zed-linux-x86_64.tar.gz`, URL
-  `https://github.com/Envel-Nikita-Gutsenkov/my-zed/releases/download/v1.31.0-my.2/zed-linux-x86_64.tar.gz`.
-- `gh` is unauthenticated; use unauthenticated `curl` to api.github.com for polling.
+## Findings
 
-## Install details
-- Binary: `~/.local/my-zed.app/bin/my-zed` (stripped `release-lite` build).
-- Launcher: `~/.local/bin/my-zed` sets `XDG_DATA_HOME=~/.local/share/my-zed`
-  so runtime data/chats/logs are separate under `~/.local/share/my-zed/zed`,
-  while config (settings, themes, providers) is shared from `~/.config/zed` and
-  API keys come from the system keyring (label `zed-github-account`, keyed by
-  provider URL).
-- Desktop entry: `~/.local/share/applications/dev.myzed.MyZed.desktop`
-  (`Name=my zed`, `StartupWMClass=dev.myzed.MyZed-Dev`).
-- Icon: `~/.local/my-zed.app/share/icons/my-zed.png`.
-- Build command: `cargo build --profile release-lite -p zed --bin zed -j 6`
-  (~20 min from scratch on this machine).
-- Projects and chats were copied once from `~/.local/share/zed` into
-  `~/.local/share/my-zed/zed` via `.agent/transfer-data.py` (SQLite backup API;
-  `0-stable` -> `0-dev` because the build is on the `dev` channel).
-- The build is on the `dev` release channel, so the launcher sets
-  `ZED_DEVELOPMENT_USE_KEYCHAIN=1` to read API keys from the system keyring
-  instead of the dev credentials file.
+- Action namespace `agent`; `actions!(agent, [...])` in `crates/agent_ui/src/agent_ui.rs`.
+- Composer: `ThreadView::render_message_editor`; mic button added before
+  `render_send_button`; voice methods around line 6960-7530 in `thread_view.rs`.
+- `voice_input::transcribe(executor, http_client, settings, keychain_key,
+  prompt_context, wav) -> Task<Result<String>>`.
+- Lints: `std::process::Command` and `smol::Timer`/`async_io::Timer` are
+  disallowed; use `smol::process::Command` (async) and
+  `gpui::BackgroundExecutor::timer`. `transcribe_cloud` takes `&BackgroundExecutor`.
+- Test fixtures in `agent_ui` fail `--all-targets` compile due to pre-existing
+  drift (`auto_continue`, `token_savings`); use `--lib` for agent_ui clippy.
+- `async_io::Timer` == `smol::Timer` (re-export) so both trip the lint.
+- README IMPORTANT banner already present.
 
-## Notes
-- Existing Zed config at `~/.config/zed`. New app reuses it (change app id,
-  not config dir) so API keys/settings carry over.
-- `APP_NAME` in `crates/paths/src/paths.rs` stays "Zed" on purpose so the new
-  build shares the existing config directory.
-- Resource monitor settings live at `resources.*`; thread maintenance at
-  `agent.thread_maintenance.*`; token savings at `agent.token_savings.*`.
+## Next
+
+Commit + tag + push + monitor CI, then install `zed-linux-x86_64.tar.gz`.

@@ -12,6 +12,7 @@ mod serde_helper;
 mod terminal;
 mod theme;
 mod title_bar;
+mod voice_input;
 mod workspace;
 
 pub use action::{ActionName, ActionWithArguments, CommandAliasTarget};
@@ -33,6 +34,7 @@ use settings_json::parse_json_with_comments;
 pub use terminal::*;
 pub use theme::*;
 pub use title_bar::*;
+pub use voice_input::*;
 pub use workspace::*;
 
 use collections::{HashMap, IndexMap, IndexSet};
@@ -219,6 +221,9 @@ pub struct SettingsContent {
 
     /// Configuration of audio in Zed.
     pub audio: Option<AudioSettingsContent>,
+
+    /// Configuration of microphone dictation for the agent panel.
+    pub voice_input: Option<VoiceInputSettingsContent>,
 
     /// Whether or not to automatically check for updates.
     ///
@@ -421,6 +426,7 @@ fallible_options::flattened_deserialize!(SettingsContent {
         title_bar, vim_mode, calls, which_key, vim, modeline_lines, feature_flags,
         instrumentation,
         resources,
+        voice_input,
     },
     defaults: {},
 });

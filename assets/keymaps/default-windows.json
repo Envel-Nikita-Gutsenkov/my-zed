@@ -341,6 +341,7 @@
       "ctrl-'": "agent::CycleThinkingEffort",
       "ctrl-alt-.": "agent::ToggleFastMode",
       "ctrl-alt-]": "agent::CycleResponseSpeed",
+      "ctrl-alt-m": "agent::ToggleVoiceInput",
     },
   },
   {

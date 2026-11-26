@@ -557,6 +557,7 @@ dependencies = [
  "util",
  "uuid",
  "vim",
+ "voice_input",
  "watch",
  "workspace",
  "zed_actions",
@@ -19765,6 +19766,26 @@ version = "0.1.0"
 dependencies = [
  "gpui",
  "settings",
+]
+
+[[package]]
+name = "voice_input"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "audio",
+ "cpal",
+ "futures 0.3.34",
+ "gpui",
+ "http_client",
+ "log",
+ "paths",
+ "serde",
+ "serde_json",
+ "settings",
+ "settings_content",
+ "smol",
+ "util",
 ]
 
 [[package]]

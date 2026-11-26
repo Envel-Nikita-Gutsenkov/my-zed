@@ -4,6 +4,35 @@
 based on upstream Zed `1.31.0`. This file describes how the fork differs from
 upstream Zed. It is not a chronological log: the fork ships as a single version.
 
+## 1.31.0-my.6
+
+### Voice input
+
+- Dictate prompts into the agent panel with a microphone button in the
+  composer toolbar. Start and stop with the button or `ctrl-alt-m`, and the
+  transcript is inserted into the message editor.
+- Dictation is configured entirely through the new `voice_input` settings
+  section: engine (`cloud` or `local`), language, input device, chunk length,
+  silence auto-stop, insertion behaviour (`trailing_space`, `auto_submit`,
+  `streaming`) and audio retention.
+- The `cloud` engine talks to any OpenAI-compatible transcription API. The
+  default preset is OpenRouter's `whisper-large-v3-turbo`, which routes to the
+  cheapest serving provider automatically; a specific provider can be pinned
+  with `voice_input.cloud.provider_slug`. Presets for Groq, OpenAI and a custom
+  endpoint are included, and every request parameter is overridable.
+- The `local` engine runs downloaded models on-device with `whisper.cpp` or
+  `sherpa-onnx` (Whisper and Parakeet models, including the int8 Parakeet
+  variants). Models are downloaded from the microphone menu, with progress, into
+  the app data directory or a directory chosen in settings.
+- Long dictations are split into bounded chunks (default 120s) that are
+  transcribed and inserted incrementally, so a slow or failing request cannot
+  interrupt the rest of the recording. The tail of the transcript is sent as a
+  prompt to keep terminology and flow coherent across chunk boundaries, with the
+  context size controlled by `voice_input.context_chars`.
+- Spoken audio is never lost on failure: the untranscribed remainder is kept in
+  memory and saved under `<data dir>/voice-recordings`, and "Retry Last
+  Dictation" in the microphone menu resumes from where it stopped.
+
 ## 1.31.0-my.5
 
 ### Fixed
