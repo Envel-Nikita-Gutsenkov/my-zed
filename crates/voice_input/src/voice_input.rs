@@ -7,6 +7,7 @@
 //! drive the microphone button and insert the resulting text.
 
 mod catalog;
+mod downloads;
 mod local;
 mod recorder;
 mod settings;
@@ -24,6 +25,11 @@ pub use catalog::{
     CLOUD_PRESETS, CloudPreset, DEFAULT_CLOUD_PRESET, DEFAULT_LOCAL_MODEL, Download, LOCAL_MODELS,
     LocalEngine, LocalModelDef, OPENROUTER_PROVIDERS, cloud_preset, is_downloaded,
     is_downloaded_by_id, local_model, model_dir, models_dir, resolve_binary,
+};
+pub use downloads::{ModelDownload, ModelDownloadStatus};
+pub use downloads::{
+    cancel as cancel_model_download, delete as delete_model_download, is_any_downloading,
+    start as start_model_download, status as model_download_status,
 };
 pub use local::{DownloadProgress, ensure_model, models_dir as local_models_dir, transcribe_local};
 pub use recorder::{AutoStopReason, Recorder, auto_stop_reason, is_too_short};
@@ -49,6 +55,7 @@ pub use wav::{
 /// Registers voice input settings with the settings store.
 pub fn init(cx: &mut App) {
     VoiceInputSettings::register(cx);
+    crate::downloads::init(cx);
 }
 
 /// Directory where captured audio is kept so a dictation survives a failed or

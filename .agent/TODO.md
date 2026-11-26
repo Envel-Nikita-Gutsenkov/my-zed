@@ -1,46 +1,34 @@
 # Task
 
-Add dictation (voice input) to the agent chat in the `my-zed` fork: a mic button
-in the composer, settings for an OpenAI-compatible cloud API and for local
-models. Cloud default is OpenRouter `whisper-large-v3-turbo` with cheapest-provider
-routing (or a forced provider); local supports Parakeet and Whisper models.
+Rework voice input UX in the personal `my-zed` fork: mic button must record (not open a menu), move it away from Send, replace hanging toast labels with a real model manager (size/status/download/delete), and make `#voice_input` settings page non-empty.
 
 ## Plan
 
-- [x] `settings_content`: `VoiceInputSettingsContent` + `voice_input` field
-- [x] `crates/voice_input` crate: `wav`, `recorder`, `catalog`, `transcribe`,
-      `local`, `settings`, lib root
-- [x] Workspace `Cargo.toml`: member + workspace dep
-- [x] `settings` crate `vscode_import.rs` initializer
-- [x] `agent_ui` integration: `ToggleVoiceInput`, dep, mic button + menu,
-      chunked async pipeline, retry
-- [x] `zed` needs no change (`agent_ui::init` calls `voice_input::init`)
-- [x] keybinding `ctrl-alt-m` in linux/windows/macos keymaps
-- [x] Robustness: `split_and_encode`, `finish_samples`, chunked streaming insert,
-      cross-chunk prompt context, audio recovery + retry
-- [x] Removed unimplemented `activation` knob (no dead settings)
-- [x] Tests: wav chunking, prompt context, settings defaults/overrides
-- [x] `cargo test -p voice_input -p settings_content` pass
-- [x] `cargo clippy -p voice_input` clean; `cargo clippy -p agent_ui --lib` clean
-- [x] `cargo fmt --all`
-- [x] CHANGELOG `## 1.31.0-my.6`
-- [ ] Commit, push, tag `v1.31.0-my.6`, monitor CI, install artifact
+- [x] Move dictation code out of `thread_view.rs` into `conversation_view/thread_view/voice_input_ui.rs`
+- [x] Split mic button (records) from chevron (opens menu)
+- [x] Move the two controls into the left composer toolbar cluster
+- [x] Add `crates/voice_input/src/downloads.rs`: global download state, cancel, delete
+- [x] Add `crates/settings_ui/src/pages/voice_input.rs`: real settings page with model manager
+- [x] Register "Voice Input" subpage under AI page with `json_path: "voice_input"`
+- [x] Replace persistent toasts: dismissable, errors stay until closed
+- [x] Menu: per-model status, select, download, cancel, delete
+- [x] CHANGELOG `1.31.0-my.7`
+- [x] check + tests + clippy (lib) for voice_input / settings_ui / agent_ui
+- [ ] Commit, tag `v1.31.0-my.7`, push, watch release
+- [ ] Install into `~/.local/my-zed.app`
 
 ## Findings
 
-- Action namespace `agent`; `actions!(agent, [...])` in `crates/agent_ui/src/agent_ui.rs`.
-- Composer: `ThreadView::render_message_editor`; mic button added before
-  `render_send_button`; voice methods around line 6960-7530 in `thread_view.rs`.
-- `voice_input::transcribe(executor, http_client, settings, keychain_key,
-  prompt_context, wav) -> Task<Result<String>>`.
-- Lints: `std::process::Command` and `smol::Timer`/`async_io::Timer` are
-  disallowed; use `smol::process::Command` (async) and
-  `gpui::BackgroundExecutor::timer`. `transcribe_cloud` takes `&BackgroundExecutor`.
-- Test fixtures in `agent_ui` fail `--all-targets` compile due to pre-existing
-  drift (`auto_continue`, `token_savings`); use `--lib` for agent_ui clippy.
-- `async_io::Timer` == `smol::Timer` (re-export) so both trip the lint.
-- README IMPORTANT banner already present.
+- `PopoverMenu::trigger_with_tooltip` swallows clicks on the trigger — that was the "mic opens model list" bug. Separate action button + menu trigger fixes it.
+- Settings UI is a curated list; arbitrary `#keys` only work if a page/subpage declares that `json_path`. `#voice_input` now resolves to exactly one `SubPageLink`, so `OpenSettingsAt` auto-opens the page.
+- Download state lives in a `gpui::Global` (`voice_input::downloads`), so it survives menu/page close and is shared by the composer menu and the settings page; the `Task` inside the entry cancels the download when dropped.
+- `StatusToast` supports `.auto_dismiss(...)` and `.dismiss_button(true)` — used to stop unremovable banners.
+- Custom lints: use `smol::process::Command`; `smol::Timer` is denied.
+- Local `cargo check` only; full release builds happen in CI (the machine OOMs otherwise).
 
-## Next
+## Structure
 
-Commit + tag + push + monitor CI, then install `zed-linux-x86_64.tar.gz`.
+- `crates/voice_input/src/`: `catalog.rs` (models/presets), `downloads.rs` (global download state), `local.rs` (download/unpack/exec), `recorder.rs`, `transcribe.rs`, `wav.rs`, `voice_input.rs` (facade, default-deny exports).
+- `crates/settings_ui/src/pages/voice_input.rs` — settings page.
+- `crates/settings_ui/src/page_data.rs` — `voice_input_section()` inside `ai_page`.
+- `crates/agent_ui/src/conversation_view/thread_view/voice_input_ui.rs` — button, menu, dictation pipeline.

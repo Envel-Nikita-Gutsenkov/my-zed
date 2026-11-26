@@ -15,7 +15,7 @@ use crate::{
     pages::{
         open_audio_test_window, render_edit_prediction_setup_page, render_external_agents_page,
         render_llm_providers_page, render_mcp_servers_page, render_sandbox_settings_page,
-        render_skills_setup_page, render_tool_permissions_setup_page,
+        render_skills_setup_page, render_tool_permissions_setup_page, render_voice_input_page,
     },
 };
 
@@ -9770,11 +9770,31 @@ fn ai_page(cx: &App) -> SettingsPage {
         })]
     }
 
+    fn voice_input_section() -> [SettingsPageItem; 2] {
+        [
+            SettingsPageItem::SectionHeader("Voice Input"),
+            SettingsPageItem::SubPageLink(SubPageLink {
+                title: "Voice Input".into(),
+                r#type: Default::default(),
+                json_path: Some("voice_input"),
+                description: Some(
+                    "Dictate messages with the microphone button in the agent panel, using cloud transcription or a local model."
+                        .into(),
+                ),
+                search_aliases: &["dictation", "speech to text", "transcription", "microphone"],
+                in_json: true,
+                files: USER,
+                render: render_voice_input_page,
+            }),
+        ]
+    }
+
     SettingsPage {
         title: "AI",
         items: concat_sections!(
             @vec,
             general_section(),
+            voice_input_section(),
             agent_configuration_section(cx),
             edit_prediction_language_settings_section(),
             edit_prediction_display_sub_section(),

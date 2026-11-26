@@ -4,13 +4,30 @@
 based on upstream Zed `1.31.0`. This file describes how the fork differs from
 upstream Zed. It is not a chronological log: the fork ships as a single version.
 
-## 1.31.0-my.6
+## 1.31.0-my.7
+
+### Voice input UX
+
+- The microphone button now starts and stops recording directly; a separate
+  chevron next to it opens the dictation menu. The button sits in the left
+  toolbar cluster, away from Send.
+- New `Settings → AI → Voice Input` page: enable switch, engine choice, cloud
+  provider overview, and a model manager that lists every local model with its
+  size, description, live download progress, and Download / Cancel / Delete /
+  Use buttons. `#voice_input` in the settings search now opens this page.
+- Local model downloads are owned by the app instead of a menu: they keep
+  running when the menu closes, show a progress bar in settings, and can be
+  cancelled or deleted from disk.
+- Dictation notices are dismissable and no longer linger at the bottom of the
+  window; download errors are reported where the download started.
 
 ### Voice input
 
-- Dictate prompts into the agent panel with a microphone button in the
-  composer toolbar. Start and stop with the button or `ctrl-alt-m`, and the
-  transcript is inserted into the message editor.
+- Dictate prompts into the agent panel with the microphone button. Start and
+  stop with the button or `ctrl-alt-m`, and the transcript is inserted into the
+  message editor. Long dictations are split into chunks that are transcribed
+  in order, so a failed request never discards what you already said, and the
+  audio is kept on disk for retrying.
 - Dictation is configured entirely through the new `voice_input` settings
   section: engine (`cloud` or `local`), language, input device, chunk length,
   silence auto-stop, insertion behaviour (`trailing_space`, `auto_submit`,

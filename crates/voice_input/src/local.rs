@@ -20,8 +20,8 @@ use std::{
 
 use anyhow::{Context as _, Result, anyhow};
 use futures::AsyncReadExt as _;
-use smol::process::Command;
 use http_client::{AsyncBody, HttpClient, Method, Request};
+use smol::process::Command;
 use util::ResultExt as _;
 
 use crate::VoiceInputLocalEngine;

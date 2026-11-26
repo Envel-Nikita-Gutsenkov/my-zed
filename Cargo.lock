@@ -16566,6 +16566,7 @@ dependencies = [
  "ui_input",
  "url",
  "util",
+ "voice_input",
  "workspace",
  "zed_actions",
  "zed_credentials_provider",

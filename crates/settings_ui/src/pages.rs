@@ -9,6 +9,7 @@ mod sandbox_settings;
 mod skill_creator;
 mod skills_setup;
 mod tool_permissions_setup;
+mod voice_input;
 
 pub(crate) use audio_input_output_setup::{
     render_input_audio_device_dropdown, render_output_audio_device_dropdown,
@@ -36,6 +37,7 @@ pub(crate) use skills_setup::{DeletedSkill, render_skills_setup_page};
 #[cfg(test)]
 pub(crate) use skills_setup::{copy_skill_share_link, trash_skill};
 pub(crate) use tool_permissions_setup::render_tool_permissions_setup_page;
+pub(crate) use voice_input::render_voice_input_page;
 
 pub use tool_permissions_setup::{
     render_copy_path_tool_config, render_create_directory_tool_config,

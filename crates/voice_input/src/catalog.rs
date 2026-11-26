@@ -86,6 +86,8 @@ pub struct LocalModelDef {
     pub id: &'static str,
     /// Human-readable name shown in the UI.
     pub name: &'static str,
+    /// One-line description of the tradeoffs shown in the model manager.
+    pub description: &'static str,
     pub engine: LocalEngine,
     /// Approximate download size, for display only.
     pub approx_size: &'static str,
@@ -116,6 +118,7 @@ pub const LOCAL_MODELS: &[LocalModelDef] = &[
     LocalModelDef {
         id: "parakeet-tdt-0.6b-v2",
         name: "Parakeet TDT 0.6B v2 (sherpa-onnx, int8)",
+        description: "Fastest English model. Best speed/accuracy balance on CPU.",
         engine: LocalEngine::SherpaOnnx,
         approx_size: "~660 MB",
         download: Download::Archive {
@@ -126,6 +129,7 @@ pub const LOCAL_MODELS: &[LocalModelDef] = &[
     LocalModelDef {
         id: "whisper-large-v3-turbo",
         name: "Whisper Large v3 Turbo (whisper.cpp)",
+        description: "Recommended default. Multilingual, near-large accuracy at turbo speed.",
         engine: LocalEngine::WhisperCpp,
         approx_size: "~1.6 GB",
         download: whisper_cpp_model(
@@ -136,6 +140,7 @@ pub const LOCAL_MODELS: &[LocalModelDef] = &[
     LocalModelDef {
         id: "whisper-large-v3",
         name: "Whisper Large v3 (whisper.cpp)",
+        description: "Highest accuracy, slowest on CPU. Use only if you have a fast machine.",
         engine: LocalEngine::WhisperCpp,
         approx_size: "~3.1 GB",
         download: whisper_cpp_model(
@@ -146,6 +151,7 @@ pub const LOCAL_MODELS: &[LocalModelDef] = &[
     LocalModelDef {
         id: "whisper-medium",
         name: "Whisper Medium (whisper.cpp)",
+        description: "Balanced multilingual accuracy at a moderate cost.",
         engine: LocalEngine::WhisperCpp,
         approx_size: "~1.5 GB",
         download: whisper_cpp_model(
@@ -156,6 +162,7 @@ pub const LOCAL_MODELS: &[LocalModelDef] = &[
     LocalModelDef {
         id: "whisper-small",
         name: "Whisper Small (whisper.cpp)",
+        description: "Good accuracy at moderate speed. Fits comfortably in RAM.",
         engine: LocalEngine::WhisperCpp,
         approx_size: "~466 MB",
         download: whisper_cpp_model(
@@ -166,6 +173,7 @@ pub const LOCAL_MODELS: &[LocalModelDef] = &[
     LocalModelDef {
         id: "whisper-base",
         name: "Whisper Base (whisper.cpp)",
+        description: "Fast and low-memory, lower accuracy.",
         engine: LocalEngine::WhisperCpp,
         approx_size: "~142 MB",
         download: whisper_cpp_model(
@@ -176,6 +184,7 @@ pub const LOCAL_MODELS: &[LocalModelDef] = &[
     LocalModelDef {
         id: "whisper-tiny",
         name: "Whisper Tiny (whisper.cpp)",
+        description: "Smallest and fastest, lowest accuracy. Good for quick notes.",
         engine: LocalEngine::WhisperCpp,
         approx_size: "~75 MB",
         download: whisper_cpp_model(
