@@ -42,13 +42,13 @@ use gpui::{
 };
 use heck::ToSnakeCase as _;
 use language_model::{
-    CompletionIntent, LanguageModel, LanguageModelCompletionError, LanguageModelCompletionEvent,
-    LanguageModelId, LanguageModelImage, LanguageModelProviderId, LanguageModelRegistry,
-    LanguageModelRequest, LanguageModelRequestMessage, LanguageModelRequestTool,
-    LanguageModelToolChoice, LanguageModelToolResult, LanguageModelToolResultContent,
-    LanguageModelToolUse, LanguageModelToolUseId, LanguageModelToolUseInput, MessageContent,
-    PromptCompactionStrategy, ProviderErrorCategory, Role, SelectedModel, Speed, StopReason,
-    TokenUsage, ZED_CLOUD_PROVIDER_ID,
+    CompactedContext, CompletionIntent, LanguageModel, LanguageModelCompletionError,
+    LanguageModelCompletionEvent, LanguageModelId, LanguageModelImage, LanguageModelProviderId,
+    LanguageModelRegistry, LanguageModelRequest, LanguageModelRequestMessage,
+    LanguageModelRequestTool, LanguageModelToolChoice, LanguageModelToolResult,
+    LanguageModelToolResultContent, LanguageModelToolUse, LanguageModelToolUseId,
+    LanguageModelToolUseInput, MessageContent, PromptCompactionStrategy, ProviderErrorCategory,
+    Role, SelectedModel, Speed, StopReason, TokenUsage, ZED_CLOUD_PROVIDER_ID,
 };
 use project::{Project, trusted_worktrees::TrustedWorktrees};
 use prompt_store::ProjectContext;
@@ -83,6 +83,11 @@ pub const MAX_SUBAGENT_DEPTH: u8 = 1;
 /// result is sent to the model. There is no client-side tokenizer, so this is
 /// deliberately conservative.
 const TOOL_OUTPUT_BYTES_PER_TOKEN: u64 = 3;
+/// Bytes-per-token used when *estimating* request size and the tokens saved by
+/// trimming. English prose averages ~4 bytes/token, which keeps the reported
+/// `saved_tokens` roughly in line with provider token counts instead of
+/// inflating them the way the conservative truncation ratio below would.
+const APPROX_BYTES_PER_TOKEN: u64 = 4;
 const TOOL_OUTPUT_TRUNCATION_MARKER: &str = "\n\n... [tool output truncated] ...\n\n";
 const OLD_TOOL_OUTPUT_OMITTED_MARKER: &str = "[older tool output omitted to save tokens]";
 const DUPLICATE_TOOL_OUTPUT_MARKER: &str =
@@ -553,7 +558,7 @@ fn estimate_request_tokens(messages: &[LanguageModelRequestMessage]) -> u64 {
                 .sum::<usize>()
         })
         .sum();
-    (bytes as u64).div_ceil(TOOL_OUTPUT_BYTES_PER_TOKEN)
+    (bytes as u64).div_ceil(APPROX_BYTES_PER_TOKEN)
 }
 
 fn message_content_text_bytes(content: &MessageContent) -> usize {
@@ -569,8 +574,9 @@ fn message_content_text_bytes(content: &MessageContent) -> usize {
                 LanguageModelToolResultContent::Image(_) => 0,
             })
             .sum(),
-        MessageContent::Image(_) => 0,
-        _ => 0,
+        MessageContent::ToolUse(tool_use) => tool_use.name.len() + tool_use.raw_input.len(),
+        MessageContent::Compaction(CompactedContext::Summary { content, .. }) => content.len(),
+        MessageContent::Image(_) | MessageContent::Compaction(_) => 0,
     }
 }
 
@@ -626,15 +632,14 @@ fn shed_text_tokens(text: &mut String, excess_tokens: u64) -> u64 {
         return 0;
     }
     let bytes = text.len();
-    let tokens = (bytes as u64).div_ceil(TOOL_OUTPUT_BYTES_PER_TOKEN);
+    let tokens = (bytes as u64).div_ceil(APPROX_BYTES_PER_TOKEN);
     if tokens <= excess_tokens {
         text.clear();
         return tokens;
     }
 
     let retain_bytes = bytes.saturating_sub(
-        usize::try_from(excess_tokens.saturating_mul(TOOL_OUTPUT_BYTES_PER_TOKEN))
-            .unwrap_or(usize::MAX),
+        usize::try_from(excess_tokens.saturating_mul(APPROX_BYTES_PER_TOKEN)).unwrap_or(usize::MAX),
     );
     *text = truncate_text_to_budget(text, retain_bytes).to_string();
     excess_tokens
@@ -5610,14 +5615,18 @@ impl Thread {
             (false, None)
         };
 
+        let (messages, saved_tokens) =
+            self.build_request_messages_until(available_tools, insertion_ix, cx);
+        // Attribute the trimming estimate to the compaction request instead of
+        // leaving the previous request's value on the stats row.
+        self.last_request_saved_tokens.set(saved_tokens);
+
         let mut request = LanguageModelRequest {
             thread_id: Some(self.id.to_string()),
             prompt_cache_key: None,
             prompt_id: Some(self.prompt_id.to_string()),
             intent: Some(CompletionIntent::ThreadContextSummarization),
-            messages: self
-                .build_request_messages_until(available_tools, insertion_ix, cx)
-                .0,
+            messages,
             tools,
             tool_choice,
             stop: Vec::new(),
@@ -8818,6 +8827,85 @@ mod tests {
                 _ => String::new(),
             },
             "recent"
+        );
+    }
+
+    #[test]
+    fn test_estimate_request_tokens_counts_tool_use_arguments() {
+        let small = tool_use_message("a", "write_file", json!({"path": "/tmp/x"}));
+        let large = tool_use_message(
+            "a",
+            "write_file",
+            json!({"path": "/tmp/x", "content": "x".repeat(4_000)}),
+        );
+
+        let small_tokens = estimate_request_tokens(&[small]);
+        let large_tokens = estimate_request_tokens(&[large]);
+
+        // The extra 4_000 bytes of arguments must be counted at ~4 bytes/token.
+        assert!(
+            large_tokens >= small_tokens + 1_000,
+            "tool-use arguments must count toward the request estimate: small={small_tokens} large={large_tokens}"
+        );
+    }
+
+    #[test]
+    fn test_token_savings_substantially_shrink_request() {
+        let mut messages = vec![system_message()];
+        for turn in 0..10 {
+            messages.push(thinking_message(&"deliberation ".repeat(300)));
+            messages.push(tool_use_message(
+                &format!("read-{turn}"),
+                "read_file",
+                json!({"path": format!("/tmp/file_{turn}.rs")}),
+            ));
+            messages.push(tool_result_message(
+                &format!("read-{turn}"),
+                "read_file",
+                &"let value = compute_something(input);\n".repeat(400),
+            ));
+            messages.push(tool_use_message(
+                &format!("write-{turn}"),
+                "write_file",
+                json!({
+                    "path": format!("/tmp/file_{turn}.rs"),
+                    "content": "x".repeat(8_000),
+                }),
+            ));
+            messages.push(tool_result_message(
+                &format!("write-{turn}"),
+                "write_file",
+                "ok",
+            ));
+        }
+
+        let mut settings = savings_settings();
+        settings.keep_recent_turns = 2;
+        settings.old_tool_output_token_limit = 400;
+        settings.old_tool_use_input_turns = 2;
+        settings.strip_old_thinking = true;
+        settings.strip_old_thinking_turns = 2;
+
+        let before = estimate_request_tokens(&messages);
+        apply_token_savings(&mut messages, &settings);
+        let after = estimate_request_tokens(&messages);
+
+        assert!(
+            after < before / 3,
+            "savings should cut the request by at least two thirds: before={before} after={after}"
+        );
+
+        let omitted_inputs = messages
+            .iter()
+            .filter(|message| {
+                message.content.iter().any(|content| {
+                    matches!(content, MessageContent::ToolUse(tool_use) if tool_use.raw_input == "{}")
+                })
+            })
+            .count();
+        assert!(
+            omitted_inputs > 0,
+            "old tool-use arguments should be omitted from the request"
         );
     }
 
