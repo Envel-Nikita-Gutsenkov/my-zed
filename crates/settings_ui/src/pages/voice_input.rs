@@ -11,12 +11,13 @@ use gpui::{App, ScrollHandle, SharedString, Window, prelude::*};
 use settings::Settings as _;
 use ui::{
     Button, ButtonStyle, Divider, Icon, IconName, IconSize, Label, LabelSize, ProgressBar,
-    SwitchField, ToggleState, prelude::*,
+    SwitchField, TintColor, ToggleState, prelude::*,
 };
 use util::ResultExt as _;
 use voice_input::{
     CLOUD_PRESETS, LOCAL_MODELS, LocalModelDef, ModelDownload, ModelDownloadStatus,
-    VoiceInputEngine, VoiceInputSettings, model_download_status,
+    VoiceInputEngine, VoiceInputSettings, model_download_status, whisper_binary_ready,
+    whisper_install_status,
 };
 
 use crate::components::SettingsSectionHeader;
@@ -420,14 +421,17 @@ fn local_section(
     let selected_model = settings.local().model().to_string();
     let dimmed = engine != VoiceInputEngine::Local;
 
-    let rows = LOCAL_MODELS.iter().map(|model| {
-        render_model_row(
-            model,
-            model.id == selected_model,
-            model_download_status(cx, model.id),
-            cx,
-        )
-    });
+    let rows = LOCAL_MODELS
+        .iter()
+        .map(|model| {
+            render_model_row(
+                model,
+                model.id == selected_model,
+                model_download_status(cx, model.id),
+                cx,
+            )
+        })
+        .collect::<Vec<_>>();
 
     v_flex()
         .gap_2()
@@ -442,7 +446,103 @@ fn local_section(
             .size(LabelSize::Small)
             .color(Color::Muted),
         )
+        .child(render_engine_row(engine, cx))
         .children(rows)
+        .into_any_element()
+}
+
+/// The whisper.cpp binary the local engine runs.
+///
+/// It is a separate download from the model, and without it a local dictation
+/// cannot start at all, so its state is shown above the model list.
+fn render_engine_row(engine: VoiceInputEngine, cx: &mut App) -> AnyElement {
+    let status = whisper_install_status(cx);
+    let downloading = status
+        .as_ref()
+        .is_some_and(|state| state.status == ModelDownloadStatus::Downloading);
+    let failed = status
+        .as_ref()
+        .is_some_and(|state| state.status == ModelDownloadStatus::Failed);
+    let ready = whisper_binary_ready();
+
+    let status_label = if ready {
+        Label::new("Ready")
+            .size(LabelSize::XSmall)
+            .color(Color::Success)
+    } else if downloading {
+        Label::new(format!("Downloading… {}", format_bytes(status.as_ref().map_or(0, |s| s.downloaded))))
+            .size(LabelSize::XSmall)
+            .color(Color::Muted)
+    } else if failed {
+        Label::new("Download failed")
+            .size(LabelSize::XSmall)
+            .color(Color::Error)
+    } else {
+        Label::new("Not installed")
+            .size(LabelSize::XSmall)
+            .color(Color::Muted)
+    };
+
+    let controls = if ready {
+        h_flex()
+    } else if downloading {
+        h_flex().child(
+            Button::new("voice-engine-cancel", "Cancel")
+                .style(ButtonStyle::Outlined)
+                .label_size(LabelSize::Small)
+                .on_click(move |_, window, cx| {
+                    voice_input::cancel_whisper_install(cx);
+                    notify_settings(window, cx);
+                }),
+        )
+    } else {
+        h_flex().child(
+            Button::new("voice-engine-install", "Install")
+                .style(ButtonStyle::Tinted(TintColor::Accent))
+                .label_size(LabelSize::Small)
+                .on_click(move |_, window, cx| {
+                    voice_input::start_whisper_install(cx);
+                    notify_settings(window, cx);
+                }),
+        )
+    };
+
+    v_flex()
+        .w_full()
+        .px_3()
+        .py_2()
+        .gap_1()
+        .rounded_md()
+        .border_1()
+        .border_color(cx.theme().colors().border_variant)
+        .child(
+            h_flex()
+                .w_full()
+                .gap_2()
+                .justify_between()
+                .items_center()
+                .child(
+                    v_flex()
+                        .gap_1()
+                        .child(Label::new("Speech engine (whisper.cpp)").size(LabelSize::Default))
+                        .child(
+                            Label::new(
+                                "Transcribes audio on this machine. Downloaded once, about 12 MB.",
+                            )
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted),
+                        ),
+                )
+                .child(controls),
+        )
+        .child(status_label)
+        .when(engine != VoiceInputEngine::Local, |this| {
+            this.child(
+                Label::new("Used when the engine above is set to Local model.")
+                    .size(LabelSize::XSmall)
+                    .color(Color::Muted),
+            )
+        })
         .into_any_element()
 }
 

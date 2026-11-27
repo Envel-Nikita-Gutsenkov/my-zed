@@ -21,14 +21,6 @@ pub struct CloudPreset {
 
 pub const CLOUD_PRESETS: &[CloudPreset] = &[
     CloudPreset {
-        id: "openrouter",
-        name: "OpenRouter (cheapest provider)",
-        endpoint: "https://openrouter.ai/api/v1",
-        model: "openai/whisper-large-v3-turbo",
-        api_key_env: "OPENROUTER_API_KEY",
-        supports_provider_routing: true,
-    },
-    CloudPreset {
         id: "groq",
         name: "Groq",
         endpoint: "https://api.groq.com/openai/v1",
@@ -54,17 +46,7 @@ pub const CLOUD_PRESETS: &[CloudPreset] = &[
     },
 ];
 
-pub const DEFAULT_CLOUD_PRESET: &str = "openrouter";
-
-/// Well-known providers on OpenRouter, offered for forced routing.
-pub const OPENROUTER_PROVIDERS: &[(&str, &str)] = &[
-    ("Groq", "Groq"),
-    ("DeepInfra", "DeepInfra"),
-    ("Fireworks", "Fireworks"),
-    ("Together", "Together"),
-    ("OpenAI", "OpenAI"),
-    ("Cerebras", "Cerebras"),
-];
+pub const DEFAULT_CLOUD_PRESET: &str = "groq";
 
 pub fn cloud_preset(id: &str) -> Option<&'static CloudPreset> {
     CLOUD_PRESETS.iter().find(|preset| preset.id == id)
@@ -244,10 +226,100 @@ pub fn is_downloaded_in(dir: &Path, model: &LocalModelDef) -> bool {
     }
 }
 
+/// whisper.cpp release that ships prebuilt command-line binaries.
+///
+/// Upstream stopped attaching binaries to the newest tags, so a release known to
+/// carry them is pinned instead of following `latest`.
+const WHISPER_CPP_RELEASE: &str = "v1.9.2";
+
+/// Executable names whisper.cpp and sherpa-onnx use across platforms.
+pub const WHISPER_BINARY_NAMES: &[&str] = &["whisper-cli", "whisper-cpp", "main"];
+pub const SHERPA_BINARY_NAMES: &[&str] = &["sherpa-onnx-offline"];
+
+/// Archive with prebuilt whisper.cpp binaries for the current platform.
+#[derive(Clone, Debug)]
+pub struct WhisperBinaryArchive {
+    pub url: String,
+    pub file_name: &'static str,
+}
+
+/// Download for the managed whisper.cpp binary, or `None` on platforms where
+/// upstream publishes no build (macOS).
+pub fn whisper_binary_archive() -> Option<WhisperBinaryArchive> {
+    let asset = if cfg!(target_os = "windows") {
+        // Upstream ships no arm64 Windows build for the pinned release, but the
+        // x64 binary runs under Windows' emulation on arm64 machines.
+        if cfg!(target_arch = "x86") {
+            "whisper-bin-Win32.zip"
+        } else {
+            "whisper-bin-x64.zip"
+        }
+    } else if cfg!(target_os = "linux") {
+        if cfg!(target_arch = "aarch64") {
+            "whisper-bin-ubuntu-arm64.tar.gz"
+        } else {
+            "whisper-bin-ubuntu-x64.tar.gz"
+        }
+    } else {
+        return None;
+    };
+
+    Some(WhisperBinaryArchive {
+        url: format!(
+            "https://github.com/ggml-org/whisper.cpp/releases/download/{WHISPER_CPP_RELEASE}/{asset}"
+        ),
+        file_name: asset,
+    })
+}
+
+/// Directory the app installs local engine binaries into.
+pub fn binaries_dir() -> PathBuf {
+    paths::data_dir().join("voice-engines")
+}
+
+/// Finds a whisper.cpp binary, checking the managed install directory and then
+/// `PATH`.
+pub fn whisper_binary() -> Option<PathBuf> {
+    find_executable(&binaries_dir(), WHISPER_BINARY_NAMES).or_else(|| {
+        WHISPER_BINARY_NAMES
+            .iter()
+            .find_map(|name| which(name))
+    })
+}
+
+/// Recursively searches `dir` for a file named like one of `names`.
+pub fn find_executable(dir: &Path, names: &[&str]) -> Option<PathBuf> {
+    // Unpacked archives keep their files in a single top-level directory, so the
+    // search has to be shallow but tolerant of that extra level.
+    fn search(dir: &Path, names: &[&str], depth: usize) -> Option<PathBuf> {
+        let mut directories = Vec::new();
+        for entry in std::fs::read_dir(dir).ok()?.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if depth > 0 {
+                    directories.push(path);
+                }
+                continue;
+            }
+            let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+                continue;
+            };
+            if names.iter().any(|name| name.eq_ignore_ascii_case(stem)) {
+                return Some(path);
+            }
+        }
+        directories
+            .into_iter()
+            .find_map(|directory| search(&directory, names, depth - 1))
+    }
+
+    search(dir, names, 3)
+}
+
 /// Resolves the executable used for a local engine.
 ///
-/// An explicit `binary_path` setting wins; otherwise the usual binary names are
-/// looked up in `PATH`.
+/// An explicit `binary_path` setting wins; then the binary installed by the app;
+/// then the usual binary names looked up in `PATH`.
 pub fn resolve_binary(engine: LocalEngine, configured: Option<&Path>) -> anyhow::Result<PathBuf> {
     if let Some(configured) = configured {
         if configured.is_file() {
@@ -257,9 +329,13 @@ pub fn resolve_binary(engine: LocalEngine, configured: Option<&Path>) -> anyhow:
     }
 
     let candidates: &[&str] = match engine {
-        LocalEngine::WhisperCpp => &["whisper-cli", "whisper-cpp", "main"],
-        LocalEngine::SherpaOnnx => &["sherpa-onnx-offline"],
+        LocalEngine::WhisperCpp => WHISPER_BINARY_NAMES,
+        LocalEngine::SherpaOnnx => SHERPA_BINARY_NAMES,
     };
+
+    if let Some(path) = find_executable(&binaries_dir(), candidates) {
+        return Ok(path);
+    }
 
     for candidate in candidates {
         if let Some(path) = which(candidate) {
@@ -268,7 +344,8 @@ pub fn resolve_binary(engine: LocalEngine, configured: Option<&Path>) -> anyhow:
     }
 
     anyhow::bail!(
-        "could not find {} in PATH; set `voice_input.local.binary_path` in your settings",
+        "could not find {} in PATH; install it from Settings → Voice Input or set \
+         `voice_input.local.binary_path`",
         candidates.join(" / ")
     )
 }

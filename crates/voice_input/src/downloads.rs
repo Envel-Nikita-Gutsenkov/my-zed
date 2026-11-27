@@ -120,6 +120,102 @@ pub fn status(cx: &App, model_id: &str) -> Option<ModelDownload> {
     None
 }
 
+/// Key used to track the managed whisper.cpp install in the same registry.
+const WHISPER_KEY: &str = "whisper.cpp";
+
+/// Whether the local engine can run: the transcription binary is present.
+pub fn whisper_binary_ready() -> bool {
+    catalog::whisper_binary().is_some()
+}
+
+/// Install state of the managed whisper.cpp binary, if known.
+///
+/// Returns `Some(Ready)` when the binary already exists, including installs from
+/// `PATH` that this session did not create.
+pub fn whisper_install_status(cx: &App) -> Option<ModelDownload> {
+    if let Some(entry) = cx
+        .try_global::<ModelDownloads>()
+        .and_then(|downloads| downloads.entries.get(WHISPER_KEY))
+    {
+        return Some(entry.snapshot());
+    }
+    whisper_binary_ready().then(|| ModelDownload {
+        status: ModelDownloadStatus::Ready,
+        downloaded: 0,
+        total: 0,
+        error: None,
+    })
+}
+
+/// Downloads the prebuilt whisper.cpp binary unless it is already running or
+/// installed.
+pub fn start_whisper_install(cx: &mut App) -> bool {
+    if whisper_binary_ready()
+        || cx
+            .try_global::<ModelDownloads>()
+            .and_then(|downloads| downloads.entries.get(WHISPER_KEY))
+            .is_some_and(|entry| entry.snapshot().is_downloading())
+    {
+        return false;
+    }
+    if catalog::whisper_binary_archive().is_none() {
+        log::warn!("voice input: no prebuilt whisper.cpp binary for this platform");
+        return false;
+    }
+
+    let client = cx.http_client();
+    let status = Arc::new(AtomicU8::new(STATUS_DOWNLOADING));
+    let progress = DownloadProgress::default();
+    let error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+
+    let task = cx.background_spawn({
+        let status = status.clone();
+        let progress = progress.clone();
+        let error = error.clone();
+        async move {
+            match local::install_whisper_binary(client.as_ref(), &progress).await {
+                Ok(_) => status.store(STATUS_READY, Ordering::Relaxed),
+                Err(install_error) => {
+                    log::error!("could not install whisper.cpp: {install_error:#}");
+                    if let Ok(mut slot) = error.lock() {
+                        *slot = Some(format!("{install_error:#}"));
+                    }
+                    status.store(STATUS_FAILED, Ordering::Relaxed);
+                }
+            }
+        }
+    });
+
+    if cx.try_global::<ModelDownloads>().is_none() {
+        return false;
+    }
+    cx.global_mut::<ModelDownloads>().entries.insert(
+        WHISPER_KEY,
+        Entry {
+            status,
+            progress,
+            error,
+            _task: task,
+        },
+    );
+    true
+}
+
+/// Stops an in-progress whisper.cpp install and removes the partial download.
+pub fn cancel_whisper_install(cx: &mut App) {
+    if cx.try_global::<ModelDownloads>().is_none() {
+        return;
+    }
+    cx.global_mut::<ModelDownloads>().entries.remove(WHISPER_KEY);
+    let dir = catalog::binaries_dir();
+    cx.background_spawn(async move {
+        if let Err(error) = std::fs::remove_dir_all(&dir) {
+            log::error!("could not remove {}: {error}", dir.display());
+        }
+    })
+    .detach();
+}
+
 /// Whether any model is currently downloading. Views use this to decide
 /// whether they need to keep polling for progress.
 pub fn is_any_downloading(cx: &App) -> bool {

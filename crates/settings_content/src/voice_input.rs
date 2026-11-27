@@ -41,7 +41,7 @@ pub struct VoiceInputSettingsContent {
     pub enabled: Option<bool>,
     /// Where transcription runs.
     ///
-    /// Default: cloud
+    /// Default: local
     pub engine: Option<VoiceInputEngine>,
     /// Language hint passed to the backend, as an ISO-639-1 code such as `en`
     /// or `ru`. When unset the backend auto-detects the language.
@@ -173,9 +173,9 @@ impl VoiceInputSettingsContent {
 #[serde(rename_all = "snake_case")]
 pub enum VoiceInputEngine {
     /// An OpenAI-compatible transcription API reachable over the network.
-    #[default]
     Cloud,
     /// A model running on this machine.
+    #[default]
     Local,
 }
 
@@ -218,10 +218,10 @@ impl VoiceInputInsertion {
 #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema, MergeFrom)]
 #[serde(rename_all = "snake_case")]
 pub struct VoiceInputCloudSettingsContent {
-    /// Which built-in endpoint preset to use: `openai`, `groq`, `openrouter`, or
-    /// `custom`. `custom` uses `endpoint` and `model` verbatim.
+    /// Which built-in endpoint preset to use: `groq`, `openai`, or `custom`.
+    /// `custom` uses `endpoint` and `model` verbatim.
     ///
-    /// Default: openrouter
+    /// Default: groq
     pub provider: Option<String>,
     /// Overrides the preset's transcription endpoint. The request is sent to
     /// `<endpoint>/audio/transcriptions`.
@@ -233,7 +233,7 @@ pub struct VoiceInputCloudSettingsContent {
     /// the system keychain under `endpoint`.
     pub api_key: Option<String>,
     /// Environment variable to read the API key from, overriding the preset's
-    /// `OPENAI_API_KEY` / `GROQ_API_KEY` / `OPENROUTER_API_KEY`.
+    /// `OPENAI_API_KEY` / `GROQ_API_KEY`.
     pub api_key_env: Option<String>,
     /// Optional prompt passed to the model to bias spelling and vocabulary,
     /// for example a list of identifier names.
@@ -276,7 +276,7 @@ impl VoiceInputCloudSettingsContent {
             .as_deref()
             .map(str::trim)
             .filter(|provider| !provider.is_empty())
-            .unwrap_or("openrouter")
+            .unwrap_or("groq")
     }
 
     pub fn routing(&self) -> VoiceInputRouting {
@@ -465,7 +465,7 @@ mod tests {
     fn defaults_are_documented_values() {
         let content = VoiceInputSettingsContent::default();
         assert!(content.enabled());
-        assert_eq!(content.engine(), VoiceInputEngine::Cloud);
+        assert_eq!(content.engine(), VoiceInputEngine::Local);
 
         assert_eq!(content.max_duration_secs(), DEFAULT_MAX_DURATION_SECS);
         assert_eq!(content.min_duration_ms(), DEFAULT_MIN_DURATION_MS);
@@ -477,7 +477,7 @@ mod tests {
         assert_eq!(content.insertion().trailing_space(), true);
         assert_eq!(content.insertion().auto_submit(), false);
         assert_eq!(content.insertion().streaming(), true);
-        assert_eq!(content.cloud().provider(), "openrouter");
+        assert_eq!(content.cloud().provider(), "groq");
         assert_eq!(content.cloud().routing(), VoiceInputRouting::Cheapest);
         assert_eq!(content.cloud().timeout_secs(), DEFAULT_CLOUD_TIMEOUT_SECS);
         assert_eq!(content.cloud().retries(), DEFAULT_CLOUD_RETRIES);
@@ -600,7 +600,7 @@ mod tests {
 
         assert_eq!(content.language(), None);
         assert_eq!(content.device(), None);
-        assert_eq!(content.cloud().provider(), "openrouter");
+        assert_eq!(content.cloud().provider(), "groq");
         assert_eq!(content.cloud().prompt(), None);
         assert_eq!(content.cloud().provider_sort(), "price");
         assert_eq!(content.local().model(), DEFAULT_LOCAL_MODEL);

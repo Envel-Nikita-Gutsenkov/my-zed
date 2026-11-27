@@ -1,7 +1,7 @@
 //! Transcription through OpenAI-compatible HTTP endpoints.
 //!
-//! The same multipart request shape is accepted by OpenAI, Groq, OpenRouter and
-//! most self-hosted servers, so one implementation covers all of them. For
+//! The same multipart request shape is accepted by OpenAI, Groq and most
+//! self-hosted servers, so one implementation covers all of them. For
 //! aggregators that host the same model on several providers, the request can
 //! be pinned to the cheapest (or a user-chosen) provider.
 
@@ -25,7 +25,7 @@ pub struct CloudParams {
     /// Optional prompt used to bias spelling and vocabulary.
     pub prompt: Option<String>,
     pub temperature: Option<f64>,
-    /// Whether the endpoint aggregates multiple providers (OpenRouter).
+    /// Whether the endpoint aggregates multiple providers.
     pub supports_provider_routing: bool,
     pub forced_provider: Option<String>,
     pub pick_cheapest_provider: bool,
@@ -218,32 +218,51 @@ pub async fn transcribe_cloud(
     params: &CloudParams,
     wav: &[u8],
 ) -> Result<String> {
-    let mut provider_pin = params.forced_provider.clone();
-    if params.pick_cheapest_provider {
-        provider_pin = cheapest_provider(client, params)
-            .await
-            .context("could not determine the cheapest provider for the model")?;
-        log::info!("voice input: using provider {provider_pin:?}");
+    // Aggregators let the request name the provider to use. A pin is useful for
+    // cost, but it hard-fails when the account is not allowed to use that
+    // provider, so an unpinned attempt always follows a pinned one.
+    let mut pins: Vec<Option<String>> = Vec::new();
+    if let Some(forced) = params.forced_provider.clone() {
+        pins.push(Some(forced));
+    } else if params.pick_cheapest_provider {
+        match cheapest_provider(client, params).await {
+            Ok(Some(pin)) => pins.push(Some(pin)),
+            Ok(None) => {}
+            Err(error) => log::warn!(
+                "voice input: could not determine the cheapest provider, routing freely: {error:#}"
+            ),
+        }
+    }
+    if params.supports_provider_routing && !pins.iter().any(Option::is_none) {
+        pins.push(None);
     }
 
-    let fields = params.form_fields(provider_pin);
-    let (content_type, body) = multipart_bytes(&fields, "file", "audio.wav", "audio/wav", wav);
     let url = format!("{}/audio/transcriptions", params.endpoint);
-
-    let mut last_error = None;
     let attempts = params.retries.saturating_add(1);
-    for attempt in 0..attempts {
-        match send_transcription(executor, client, params, &url, &content_type, &body).await {
-            Ok(text) => return Ok(text),
-            Err(error) => {
-                if attempt + 1 < attempts {
-                    log::warn!(
-                        "voice input: transcription attempt {} of {} failed: {error:#}",
-                        attempt + 1,
-                        attempts
-                    );
+    let mut last_error = None;
+
+    for pin in pins {
+        let fields = params.form_fields(pin.clone());
+        let (content_type, body) = multipart_bytes(&fields, "file", "audio.wav", "audio/wav", wav);
+        for attempt in 0..attempts {
+            match send_transcription(executor, client, params, &url, &content_type, &body).await {
+                Ok(text) => return Ok(text),
+                Err(error) => {
+                    let transient = is_transient(&error);
+                    if attempt + 1 < attempts && transient {
+                        log::warn!(
+                            "voice input: transcription attempt {} of {} (provider {pin:?}) failed: {error:#}",
+                            attempt + 1,
+                            attempts
+                        );
+                    }
+                    last_error = Some(error);
+                    if !transient {
+                        // The request itself is wrong; retrying or repinning will
+                        // not help, so fall through to the unpinned attempt if any.
+                        break;
+                    }
                 }
-                last_error = Some(error);
             }
         }
     }
@@ -289,10 +308,11 @@ async fn send_transcription(
         let text = String::from_utf8_lossy(&body).into_owned();
 
         if !status.is_success() {
-            anyhow::bail!(
-                "transcription request failed with {status}: {}",
-                text.trim().chars().take(500).collect::<String>()
-            );
+            return Err(TranscriptionFailure {
+                status: status.as_u16(),
+                body: text.trim().chars().take(500).collect(),
+            }
+            .into());
         }
 
         parse_transcription(&text)
@@ -312,6 +332,57 @@ async fn send_transcription(
             }
         }
         None => attempt.await,
+    }
+}
+
+/// A transcription request the endpoint rejected.
+#[derive(Debug)]
+struct TranscriptionFailure {
+    status: u16,
+    body: String,
+}
+
+impl std::fmt::Display for TranscriptionFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "the transcription request was rejected with HTTP {}",
+            self.status
+        )?;
+        let body = self.body.replace('\n', " ");
+        let body = body.trim();
+        if !body.is_empty() {
+            write!(formatter, ": {body}")?;
+        }
+        if let Some(hint) = status_hint(self.status) {
+            write!(formatter, "\n\n{hint}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for TranscriptionFailure {}
+
+/// A short, actionable explanation for the statuses a user can actually fix.
+fn status_hint(status: u16) -> Option<&'static str> {
+    Some(match status {
+        401 => "The API key was rejected. Check `voice_input.cloud.api_key` and that the key is stored in your keychain.",
+        403 => "The account is not allowed to use this model or provider. Check the model name and the allow-list for your API key.",
+        404 => "The endpoint or model was not found. Check `voice_input.cloud.endpoint` and `voice_input.cloud.model`.",
+        413 => "The recording is too large for this endpoint. Lower `voice_input.chunk_secs`.",
+        429 => "Rate limited or out of credit. Check your balance, and raise `voice_input.cloud.retries` if the limit is transient.",
+        _ => return None,
+    })
+}
+
+/// Whether a failed request is worth repeating.
+///
+/// Client errors other than rate limits and timeouts will fail the same way no
+/// matter how often they are retried.
+fn is_transient(error: &anyhow::Error) -> bool {
+    match error.downcast_ref::<TranscriptionFailure>() {
+        Some(failure) => matches!(failure.status, 408 | 425 | 429) || failure.status >= 500,
+        None => true,
     }
 }
 

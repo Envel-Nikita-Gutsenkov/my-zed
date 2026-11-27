@@ -118,7 +118,7 @@ fn primary_path(model: &LocalModelDef, dir: &Path) -> Result<PathBuf> {
     }
 }
 
-async fn download_to_file(
+pub(crate) async fn download_to_file(
     client: &dyn HttpClient,
     url: &str,
     destination: &Path,
@@ -128,7 +128,7 @@ async fn download_to_file(
         .method(Method::GET)
         .uri(url)
         .body(AsyncBody::empty())
-        .with_context(|| format!("invalid model download URL {url}"))?;
+        .with_context(|| format!("invalid download URL {url}"))?;
 
     let mut response = client
         .send(request)
@@ -136,7 +136,7 @@ async fn download_to_file(
         .with_context(|| format!("could not reach {url}"))?;
     let status = response.status();
     if !status.is_success() {
-        anyhow::bail!("model download failed with {status} for {url}");
+        anyhow::bail!("download failed with {status} for {url}");
     }
 
     let total = response
@@ -156,7 +156,7 @@ async fn download_to_file(
         let read = body
             .read(&mut buffer)
             .await
-            .context("could not read the model download")?;
+            .context("could not read the download")?;
         if read == 0 {
             break;
         }
@@ -170,19 +170,72 @@ async fn download_to_file(
     Ok(())
 }
 
-async fn extract_archive(archive: &Path, destination: &Path) -> Result<()> {
-    let status = Command::new("tar")
+pub(crate) async fn extract_archive(archive: &Path, destination: &Path) -> Result<()> {
+    let status = hidden_command(Path::new("tar"))
         .arg("-xf")
         .arg(archive)
         .arg("-C")
         .arg(destination)
         .status()
         .await
-        .context("could not run `tar` to unpack the model archive")?;
+        .context("could not run `tar` to unpack the archive")?;
     if !status.success() {
         anyhow::bail!("`tar` failed to unpack {}", archive.display());
     }
     Ok(())
+}
+
+/// Builds a command that does not flash a console window on Windows.
+fn hidden_command(binary: &Path) -> Command {
+    #[allow(unused_mut)]
+    let mut command = Command::new(binary);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command
+}
+
+/// Downloads and unpacks the prebuilt whisper.cpp binary into the directory the
+/// app owns, so the local engine works without a manual install.
+pub async fn install_whisper_binary(
+    client: &dyn HttpClient,
+    progress: &DownloadProgress,
+) -> Result<PathBuf> {
+    let archive = catalog::whisper_binary_archive().ok_or_else(|| {
+        anyhow!(
+            "there is no prebuilt whisper.cpp binary for this platform; install it yourself \
+             and set `voice_input.local.binary_path`"
+        )
+    })?;
+    let directory = catalog::binaries_dir();
+    std::fs::create_dir_all(&directory)
+        .with_context(|| format!("could not create {}", directory.display()))?;
+
+    let archive_path = directory.join(archive.file_name);
+    let partial_path = directory.join(format!("{}.part", archive.file_name));
+    download_to_file(client, &archive.url, &partial_path, progress).await?;
+    std::fs::rename(&partial_path, &archive_path)
+        .with_context(|| format!("could not rename {}", partial_path.display()))?;
+
+    extract_archive(&archive_path, &directory).await?;
+    std::fs::remove_file(&archive_path).log_err();
+
+    let binary = catalog::find_executable(&directory, catalog::WHISPER_BINARY_NAMES)
+        .ok_or_else(|| anyhow!("the downloaded archive did not contain whisper.cpp"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = std::fs::metadata(&binary)
+            .map(|metadata| metadata.permissions().mode())
+            .unwrap_or(0o755);
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(mode | 0o755))
+            .with_context(|| format!("could not make {} executable", binary.display()))?;
+    }
+    log::info!("voice input: installed whisper.cpp at {}", binary.display());
+    Ok(binary)
 }
 
 /// Transcribes 16 kHz mono WAV audio with a local model.
@@ -256,7 +309,7 @@ async fn run_whisper_cpp(
     prompt_context: Option<&str>,
     extra_args: &[String],
 ) -> Result<String> {
-    let mut command = Command::new(binary);
+    let mut command = hidden_command(binary);
     command
         .arg("-m")
         .arg(model_path)
@@ -264,6 +317,7 @@ async fn run_whisper_cpp(
         .arg(wav_path)
         .arg("-l")
         .arg(language)
+        .arg("-np")
         .arg("-nt");
     if let Some(threads) = threads {
         command.arg("-t").arg(threads.to_string());
@@ -302,7 +356,7 @@ async fn run_sherpa_onnx(
     let joiner = find_file(model_dir, "joiner")
         .ok_or_else(|| anyhow!("no joiner model found in {}", model_dir.display()))?;
 
-    let output = Command::new(binary)
+    let output = hidden_command(binary)
         .arg(format!("--tokens={}", tokens.display()))
         .arg(format!("--encoder={}", encoder.display()))
         .arg(format!("--decoder={}", decoder.display()))

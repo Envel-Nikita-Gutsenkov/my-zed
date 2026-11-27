@@ -824,6 +824,8 @@ pub struct ThreadView {
     /// The last dictation, kept so a failed or interrupted transcription can be
     /// resumed without re-recording.
     last_voice_take: Option<voice_input_ui::VoiceTake>,
+    /// Inline status/error line shown in the composer instead of a status toast.
+    voice_notice: Option<voice_input_ui::VoiceNotice>,
 }
 
 impl Focusable for ThreadView {
@@ -1344,6 +1346,7 @@ impl ThreadView {
             add_context_menu_handle: PopoverMenuHandle::default(),
             voice_input: voice_input_ui::VoiceInputState::Idle,
             last_voice_take: None,
+            voice_notice: None,
             thinking_effort_menu_handle: PopoverMenuHandle::default(),
             fast_mode_menu_handle: PopoverMenuHandle::default(),
             project,
@@ -5747,6 +5750,7 @@ impl ThreadView {
                             .when(fills_container, |this| this.flex_1())
                             .pt_1()
                             .pr_2p5()
+                            .children(self.render_voice_notice(cx))
                             .child(self.message_editor.clone())
                             .when(has_messages, |this| {
                                 this.child(

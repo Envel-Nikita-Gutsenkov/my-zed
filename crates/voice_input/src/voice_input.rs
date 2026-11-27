@@ -11,6 +11,7 @@ mod downloads;
 mod local;
 mod recorder;
 mod settings;
+mod text;
 mod transcribe;
 mod wav;
 
@@ -23,14 +24,16 @@ use http_client::HttpClient;
 
 pub use catalog::{
     CLOUD_PRESETS, CloudPreset, DEFAULT_CLOUD_PRESET, DEFAULT_LOCAL_MODEL, Download, LOCAL_MODELS,
-    LocalEngine, LocalModelDef, OPENROUTER_PROVIDERS, cloud_preset, is_downloaded,
-    is_downloaded_by_id, local_model, model_dir, models_dir, resolve_binary,
+    LocalEngine, LocalModelDef, cloud_preset, is_downloaded,
+    is_downloaded_by_id, local_model, model_dir, models_dir, resolve_binary, whisper_binary,
 };
 pub use downloads::{ModelDownload, ModelDownloadStatus};
 pub use downloads::{
-    cancel as cancel_model_download, delete as delete_model_download, is_any_downloading,
-    start as start_model_download, status as model_download_status,
+    cancel as cancel_model_download, cancel_whisper_install, delete as delete_model_download,
+    is_any_downloading, start as start_model_download, start_whisper_install,
+    status as model_download_status, whisper_binary_ready, whisper_install_status,
 };
+pub use text::{append_chunk, clean_chunk, prompt_tail};
 pub use local::{DownloadProgress, ensure_model, models_dir as local_models_dir, transcribe_local};
 pub use recorder::{
     AutoStopReason, InputDeviceInfo, Recorder, auto_stop_reason, input_devices, is_too_short,
@@ -143,7 +146,7 @@ mod tests {
     fn defaults_when_unset() {
         let content = VoiceInputSettingsContent::default();
         assert!(content.enabled());
-        assert_eq!(content.engine(), VoiceInputEngine::Cloud);
+        assert_eq!(content.engine(), VoiceInputEngine::Local);
 
         assert_eq!(content.max_duration_secs(), DEFAULT_MAX_DURATION_SECS);
         assert_eq!(content.min_duration_ms(), DEFAULT_MIN_DURATION_MS);
@@ -153,7 +156,7 @@ mod tests {
     }
 
     #[test]
-    fn cloud_defaults_select_openrouter_cheapest() {
+    fn cloud_defaults_select_groq_cheapest() {
         let cloud = VoiceInputSettingsContent::default().cloud();
         assert_eq!(cloud.provider(), DEFAULT_CLOUD_PRESET);
         assert_eq!(cloud.routing(), VoiceInputRouting::Cheapest);

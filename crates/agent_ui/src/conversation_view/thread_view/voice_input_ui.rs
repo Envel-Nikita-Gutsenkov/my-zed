@@ -6,6 +6,78 @@
 
 use super::*;
 
+/// A short status line shown inside the composer.
+///
+/// Dictation problems used to be raised as status toasts, which covered the
+/// bottom of the window and, for errors, never expired. They are reported
+/// inline instead: always dismissible, never overlapping other UI, and they
+/// disappear as soon as a new recording starts.
+pub(super) struct VoiceNotice {
+    text: SharedString,
+    is_error: bool,
+    /// Offer "Retry" for a take that still has untranscribed chunks.
+    can_retry: bool,
+    /// Offer "Install" when the local engine or its model is missing.
+    can_install: bool,
+}
+
+impl VoiceNotice {
+    fn error(text: impl Into<SharedString>) -> Self {
+        Self {
+            text: text.into(),
+            is_error: true,
+            can_retry: false,
+            can_install: false,
+        }
+    }
+
+    fn info(text: impl Into<SharedString>) -> Self {
+        Self {
+            text: text.into(),
+            is_error: false,
+            can_retry: false,
+            can_install: false,
+        }
+    }
+
+    fn with_retry(mut self) -> Self {
+        self.can_retry = true;
+        self
+    }
+
+    fn with_install(mut self) -> Self {
+        self.can_install = true;
+        self
+    }
+}
+
+/// Explains which part of the local engine is still being fetched.
+fn local_install_progress_text(
+    binary_missing: bool,
+    model_missing: Option<(&str, &str)>,
+) -> SharedString {
+    let model = match model_missing {
+        Some((name, size)) => format!("the {name} model ({size})"),
+        None => String::new(),
+    };
+    match (binary_missing, model_missing.is_some()) {
+        (true, true) => format!(
+            "Downloading the local speech engine and {model} in the background. Progress is on \
+             Settings → AI → Voice Input; press the microphone again when it finishes."
+        )
+        .into(),
+        (true, false) => "Downloading the local speech engine in the background. Progress is \
+             on Settings → AI → Voice Input; press the microphone again when it finishes."
+            .into(),
+        (false, true) => format!(
+            "Downloading {model} in the background. Progress is on Settings → AI → Voice \
+             Input; press the microphone again when it finishes."
+        )
+        .into(),
+        (false, false) => SharedString::from("The local speech engine is ready."),
+    }
+}
+
 /// Progress of an in-flight dictation in the message editor.
 pub(super) enum VoiceInputState {
     Idle,
@@ -33,15 +105,6 @@ impl VoiceInputState {
     }
 }
 
-/// Returns at most `max_chars` characters from the end of `text`, snapped to a
-/// character boundary, for use as cross-chunk transcription context.
-fn tail_chars(text: &str, max_chars: usize) -> String {
-    let char_count = text.chars().count();
-    if char_count <= max_chars {
-        return text.to_string();
-    }
-    text.chars().skip(char_count - max_chars).collect()
-}
 
 impl ThreadView {
     /// The microphone toggle plus a small chevron that opens the dictation
@@ -333,44 +396,67 @@ impl ThreadView {
         cx.notify();
     }
 
+    /// Starts whatever the selected engine still needs: the whisper.cpp binary
+    /// for local dictation and the chosen model. Used by the inline notice, so a
+    /// first-time user can fix a missing local engine without hunting through
+    /// settings.
+    fn install_voice_dependencies(&mut self, cx: &mut Context<Self>) {
+        let content = VoiceInputSettings::get_global(cx).content().clone();
+        if content.engine() != voice_input::VoiceInputEngine::Local {
+            return;
+        }
+
+        let binary_missing = !voice_input::whisper_binary_ready();
+        let model_id = content.local().model().to_string();
+        let model = voice_input::local_model(&model_id);
+        let model_missing = model.is_some_and(|model| {
+            !voice_input::model_is_downloaded(VoiceInputSettings::get_global(cx), model)
+        });
+
+        let binary_started = binary_missing && voice_input::start_whisper_install(cx);
+        let model_started = model_missing
+            && model.is_some_and(|model| voice_input::start_model_download(cx, model.id));
+
+        let mut notice = VoiceNotice::info(local_install_progress_text(
+            binary_missing,
+            model.map(|model| (model.name, model.approx_size)),
+        ));
+        // A download that failed (or was cancelled) is restarted from the notice;
+        // while one is in flight the same click would be a no-op.
+        if (binary_missing && !binary_started) || (model_missing && !model_started) {
+            notice = notice.with_install();
+        }
+        self.set_voice_notice(notice, cx);
+    }
+
     /// Whether a transcription attempt can start right now.
     ///
-    /// With the cloud engine there is nothing to prepare. With a local model the
-    /// download is kicked off instead of a recording, so a missing model never
-    /// silently drops the dictation.
+    /// The cloud engine has nothing to prepare. The local engine needs both the
+    /// whisper.cpp binary and the selected model, and whichever is missing is
+    /// installed instead of starting a recording that could not be transcribed.
     fn ensure_voice_engine_ready(&mut self, cx: &mut Context<Self>) -> bool {
         let content = VoiceInputSettings::get_global(cx).content().clone();
         if content.engine() != voice_input::VoiceInputEngine::Local {
             return true;
         }
+
         let model_id = content.local().model().to_string();
-        let downloaded = voice_input::local_model(&model_id).is_some_and(|model| {
-            voice_input::model_is_downloaded(VoiceInputSettings::get_global(cx), model)
-        });
-        if downloaded {
+        let Some(model) = voice_input::local_model(&model_id) else {
+            self.set_voice_notice(
+                VoiceNotice::error(format!("Unknown local transcription model {model_id}")),
+                cx,
+            );
+            return false;
+        };
+
+        let binary_ready = voice_input::whisper_binary_ready();
+        let model_ready =
+            voice_input::model_is_downloaded(VoiceInputSettings::get_global(cx), model);
+        if binary_ready && model_ready {
             return true;
         }
 
-        match voice_input::local_model(&model_id) {
-            Some(model) => {
-                let id = model.id;
-                self.start_model_download(id, cx);
-                self.show_voice_toast(
-                    format!(
-                        "{} is downloading ({}). Progress and the model list are in the \
-                         Voice Input menu and in Settings → Voice Input.",
-                        model.name, model.approx_size
-                    ),
-                    false,
-                    cx,
-                );
-            }
-            None => self.show_voice_toast(
-                format!("Unknown local transcription model {model_id}"),
-                true,
-                cx,
-            ),
-        }
+        self.install_voice_dependencies(cx);
         false
     }
 
@@ -391,17 +477,17 @@ impl ThreadView {
                 self.voice_input = VoiceInputState::Recording {
                     recorder: Some(recorder),
                 };
+                self.voice_notice = None;
                 cx.notify();
                 self.spawn_auto_stop_watcher(window, cx);
             }
             Err(error) => {
-                self.show_voice_toast(
-                    format!(
+                self.set_voice_notice(
+                    VoiceNotice::error(format!(
                         "Could not start recording: {error:#}. Another application may be using \
-                         the microphone, or a different input device can be picked in \
-                         Settings → Voice Input and in the `voice_input.device` setting."
-                    ),
-                    true,
+                         the microphone, or another input device can be picked under \
+                         Settings → AI → Voice Input."
+                    )),
                     cx,
                 );
             }
@@ -455,16 +541,20 @@ impl ThreadView {
 
         let content = VoiceInputSettings::get_global(cx).content().clone();
         if voice_input::is_too_short(recorder.elapsed(), &content) {
-            self.show_voice_toast("Recording was too short to transcribe", true, cx);
-            cx.notify();
+            self.set_voice_notice(
+                VoiceNotice::error("Recording was too short to transcribe"),
+                cx,
+            );
             return;
         }
 
         let (samples, sample_rate) = match recorder.finish_samples() {
             Ok(samples) => samples,
             Err(error) => {
-                self.show_voice_toast(format!("Could not finish recording: {error:#}"), true, cx);
-                cx.notify();
+                self.set_voice_notice(
+                    VoiceNotice::error(format!("Could not finish recording: {error:#}")),
+                    cx,
+                );
                 return;
             }
         };
@@ -482,8 +572,10 @@ impl ThreadView {
         drop(samples);
 
         if chunks.is_empty() {
-            self.show_voice_toast("Recording was too short to transcribe", true, cx);
-            cx.notify();
+            self.set_voice_notice(
+                VoiceNotice::error("Recording was too short to transcribe"),
+                cx,
+            );
             return;
         }
 
@@ -537,11 +629,9 @@ impl ThreadView {
 
             while take.next < take.chunks.len() {
                 let chunk = take.chunks[take.next].clone();
-                let prompt_context = if context_chars > 0 && !take.transcript.is_empty() {
-                    Some(tail_chars(&take.transcript, context_chars))
-                } else {
-                    None
-                };
+                let prompt_context = (context_chars > 0)
+                    .then(|| voice_input::prompt_tail(&take.transcript, context_chars))
+                    .flatten();
                 let result = voice_input::transcribe(
                     &executor,
                     client.clone(),
@@ -555,24 +645,17 @@ impl ThreadView {
                 match result {
                     Ok(text) => {
                         take.next += 1;
-                        let text = text.trim();
-                        if text.is_empty() {
+                        // `append_chunk` drops silence annotations, repeated overlap
+                        // between chunks and duplicated text, then spaces the result.
+                        let before = take.transcript.len();
+                        voice_input::append_chunk(&mut take.transcript, &text);
+                        if take.transcript.len() == before {
                             continue;
                         }
-                        let piece = if take.transcript.is_empty() {
-                            text.to_string()
-                        } else {
-                            format!(" {text}")
-                        };
-                        take.transcript.push_str(&piece);
-
                         if streaming {
-                            // `piece` already carries the separating space for all
-                            // but the first chunk, so insert it verbatim. A single
-                            // trailing space is added once the take completes.
-                            let to_insert = piece.clone();
+                            let inserted = take.transcript[before..].to_string();
                             this.update_in(cx, |this, window, cx| {
-                                this.insert_voice_text(&to_insert, window, cx);
+                                this.insert_voice_text(&inserted, window, cx);
                             })
                             .ok();
                         }
@@ -654,12 +737,12 @@ impl ThreadView {
                     }
                 };
                 self.last_voice_take = Some(take);
-                self.show_voice_toast(
-                    format!(
-                        "Voice input stopped after {completed}/{total} parts: {error:#}.{saved_note} \
-                         Use “Retry Last Dictation” to continue."
-                    ),
-                    true,
+                self.set_voice_notice(
+                    VoiceNotice::error(format!(
+                        "Transcribed {completed} of {total} parts, then stopped: {error:#}.{saved_note} \
+                         The recorded audio is kept, so Retry continues from the same place."
+                    ))
+                    .with_retry(),
                     cx,
                 );
             }
@@ -671,6 +754,7 @@ impl ThreadView {
                     voice_input::save_recordings(&take.chunks).log_err();
                 }
                 self.last_voice_take = None;
+                self.voice_notice = None;
                 if auto_submit {
                     self.send(window, cx);
                 }
@@ -692,33 +776,77 @@ impl ThreadView {
         }
     }
 
-    fn show_voice_toast(
-        &self,
-        message: impl Into<SharedString>,
-        is_error: bool,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(workspace) = self.workspace.upgrade() else {
-            return;
+    /// The inline dictation status line, if there is something to report.
+    pub(super) fn render_voice_notice(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let notice = self.voice_notice.as_ref()?;
+        let color = if notice.is_error {
+            Color::Error
+        } else {
+            Color::Muted
         };
-        let message = message.into();
-        workspace.update(cx, |workspace, cx| {
-            let icon = if is_error {
-                Icon::new(IconName::Warning)
-                    .size(IconSize::Small)
-                    .color(Color::Error)
-            } else {
-                Icon::new(IconName::Mic)
-                    .size(IconSize::Small)
-                    .color(Color::Muted)
-            };
-            let toast = StatusToast::new(message, cx, |this, _cx| {
-                // Errors have to stay readable until dismissed, but they must
-                // also be closable; notifications that cannot be removed are
-                // worse than no notification at all.
-                this.icon(icon).auto_dismiss(!is_error).dismiss_button(true)
-            });
-            workspace.toggle_status_toast(toast, cx);
-        });
+        let icon = if notice.is_error {
+            IconName::Warning
+        } else {
+            IconName::Mic
+        };
+
+        let mut actions = h_flex().flex_shrink_0().gap_1().items_center();
+        if notice.can_install {
+            actions = actions.child(
+                Button::new("voice-notice-install", "Install")
+                    .style(ButtonStyle::Tinted(TintColor::Accent))
+                    .label_size(LabelSize::Small)
+                    .on_click(cx.listener(|this, _, _window, cx| {
+                        this.install_voice_dependencies(cx);
+                    })),
+            );
+        }
+        if notice.can_retry {
+            actions = actions.child(
+                Button::new("voice-notice-retry", "Retry")
+                    .style(ButtonStyle::Outlined)
+                    .label_size(LabelSize::Small)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.retry_voice_transcription(window, cx);
+                    })),
+            );
+        }
+        actions = actions.child(
+            IconButton::new("voice-notice-dismiss", IconName::Close)
+                .icon_size(IconSize::XSmall)
+                .icon_color(Color::Muted)
+                .tooltip(Tooltip::text("Dismiss"))
+                .on_click(cx.listener(|this, _, _window, cx| {
+                    this.voice_notice = None;
+                    cx.notify();
+                })),
+        );
+
+        Some(
+            h_flex()
+                .id("voice-notice")
+                .mb_1()
+                .px_2()
+                .py_1()
+                .gap_2()
+                .items_center()
+                .rounded_sm()
+                .border_1()
+                .border_color(cx.theme().colors().border_variant)
+                .child(Icon::new(icon).size(IconSize::XSmall).color(color))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .child(Label::new(notice.text.clone()).size(LabelSize::XSmall).color(color)),
+                )
+                .child(actions)
+                .into_any_element(),
+        )
+    }
+
+    fn set_voice_notice(&mut self, notice: VoiceNotice, cx: &mut Context<Self>) {
+        self.voice_notice = Some(notice);
+        cx.notify();
     }
 }

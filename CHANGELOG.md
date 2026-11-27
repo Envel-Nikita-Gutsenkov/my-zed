@@ -4,6 +4,29 @@
 based on upstream Zed `1.31.0`. This file describes how the fork differs from
 upstream Zed. It is not a chronological log: the fork ships as a single version.
 
+## 1.31.0-my.10
+
+### Voice input
+
+- Dictation works out of the box on a fresh install: the local engine is the
+  default, and the first press of the microphone downloads the `whisper.cpp`
+  binary (with progress in the composer and in settings) in addition to the
+  model. Recording starts as soon as both are in place.
+- The cloud engine defaults to Groq's `whisper-large-v3-turbo` instead of
+  OpenRouter, which has no `/audio/transcriptions` endpoint and could never
+  transcribe. The OpenRouter preset and the provider-routing logic that only it
+  used were removed; Groq, OpenAI and a custom endpoint remain.
+- The status line for dictation moved inside the composer, above the editor. It
+  no longer floats over the bottom of the window, can always be dismissed, and
+  clears itself when a dictation succeeds.
+- Chunk merging was reworked: punctuation-only tokens no longer shift the
+  overlap offset, a chunk that continues the previous one is rejoined without a
+  duplicate word, a new sentence across a chunk boundary is capitalised while
+  identifiers and function calls are left alone, and known Whisper
+  hallucinations ("Thanks for watching", "Продолжение следует", subtitle
+  credits) and non-speech annotations (`[BLANK_AUDIO]`, `(music)`, `♪`) are
+  dropped instead of inserted.
+
 ## 1.31.0-my.9
 
 ### Voice input
