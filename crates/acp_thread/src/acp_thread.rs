@@ -8221,7 +8221,7 @@ impl AcpThread {
                 snapshot
             } else {
                 action_log.update(cx, |action_log, cx| {
-                    action_log.buffer_read(buffer.clone(), cx);
+                    action_log.record_file_read(&buffer, cx);
                 });
 
                 let snapshot = buffer.update(cx, |buffer, _| buffer.snapshot());

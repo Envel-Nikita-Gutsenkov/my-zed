@@ -529,6 +529,17 @@ impl ActionLog {
         })?
     }
 
+    /// Record that the agent read a file, without registering the buffer for change tracking.
+    ///
+    /// Unlike [`Self::buffer_read`], this only records the read time used for staleness
+    /// checks. It deliberately does not create a [`TrackedBuffer`], because doing so keeps
+    /// the buffer, its language-server registration and a full syntax-highlighted
+    /// [`BufferDiff`] alive for the lifetime of the action log, even for files the agent only
+    /// reads. Read-only files never appear in [`Self::changed_buffers`] anyway.
+    pub fn record_file_read(&mut self, buffer: &Entity<Buffer>, cx: &mut Context<Self>) {
+        self.update_file_read_time(buffer, cx);
+    }
+
     /// Track a buffer as read by agent, so we can notify the model about user edits.
     pub fn buffer_read(&mut self, buffer: Entity<Buffer>, cx: &mut Context<Self>) {
         self.buffer_read_impl(buffer, true, cx);
@@ -1326,6 +1337,39 @@ mod tests {
         cx.update(|cx| {
             let settings_store = SettingsStore::test(cx);
             cx.set_global(settings_store);
+        });
+    }
+
+    #[gpui::test]
+    async fn test_record_file_read_does_not_track_buffer(cx: &mut TestAppContext) {
+        init_test(cx);
+
+        let fs = FakeFs::new(cx.executor());
+        fs.insert_tree(path!("/dir"), json!({ "file": "abc\ndef\nghi\n" }))
+            .await;
+        let project = Project::test(fs.clone(), [path!("/dir").as_ref()], cx).await;
+        let action_log = cx.new(|_| ActionLog::new(project.clone()));
+        let file_path = project
+            .read_with(cx, |project, cx| project.find_project_path("dir/file", cx))
+            .unwrap();
+        let buffer = project
+            .update(cx, |project, cx| project.open_buffer(file_path, cx))
+            .await
+            .unwrap();
+
+        cx.update(|cx| {
+            action_log.update(cx, |log, cx| log.record_file_read(&buffer, cx));
+            buffer.update(cx, |buffer, cx| buffer.set_text("changed", cx));
+        });
+        cx.run_until_parked();
+
+        // A buffer that was only read must not be registered for change tracking, as that would
+        // retain the buffer, its language server registration and its diff for the lifetime of
+        // the log. `stale_buffers` only reports tracked buffers, so it being empty proves that
+        // no `TrackedBuffer` was created.
+        action_log.read_with(cx, |log, cx| {
+            assert_eq!(log.changed_buffers(cx).count(), 0);
+            assert_eq!(log.stale_buffers(cx).count(), 0);
         });
     }
 

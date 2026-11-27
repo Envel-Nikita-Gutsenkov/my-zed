@@ -4,6 +4,18 @@
 based on upstream Zed `1.31.0`. This file describes how the fork differs from
 upstream Zed. It is not a chronological log: the fork ships as a single version.
 
+## 1.31.0-my.14
+
+### Agent
+
+- Reading a file no longer leaks memory for the rest of the session. The action
+  log used to keep every file the agent read alive — the buffer, its language
+  server registration and a full syntax-highlighted diff of the whole file —
+  even though files that were never edited never appear in the review pane.
+  Files are now tracked for review only when the agent actually edits them, so
+  long multi-hour sessions with hundreds of reads no longer accumulate gigabytes
+  of retained buffers and parse trees.
+
 ## 1.31.0-my.13
 
 ### Agent

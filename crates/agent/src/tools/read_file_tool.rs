@@ -501,7 +501,7 @@ impl AgentTool for ReadFileTool {
                 });
 
                 action_log.update(cx, |log, cx| {
-                    log.buffer_read(buffer.clone(), cx);
+                    log.record_file_read(&buffer, cx);
                 });
 
                 Ok(result_text.into())
@@ -515,9 +515,8 @@ impl AgentTool for ReadFileTool {
                 .await.map_err(tool_content_err)?;
 
                 action_log.update(cx, |log, cx| {
-                    log.buffer_read(buffer.clone(), cx);
+                    log.record_file_read(&buffer, cx);
                 });
-
 
                 is_outline_response = buffer_content.is_synthetic;
 
