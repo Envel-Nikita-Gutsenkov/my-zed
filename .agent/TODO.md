@@ -81,10 +81,20 @@ as `v1.31.0-my.14`.
 
 ## Next
 
-- Commit, tag `v1.31.0-my.14`, push, poll release run, install, verify
-  `~/.local/my-zed.app/bin/zed --version` shows the new commit.
-- Validate the memory drop after restart: compare `mallinfo2` heap in-use and
-  `smaps_rollup` swap during a long agent session.
-- Follow-up candidate: reviewed/kept tracked buffers (edited files) are still
-  retained forever; if edited-file count is large, prune entries with no
-  unreviewed edits after review.
+- [ ] Tag `v1.31.0-my.14` (commit `77bb257`) is pushed; release run 46062902579 is
+      building. Poll the direct asset URL (HEAD 200 ⇒ published):
+      `https://github.com/Envel-Nikita-Gutsenkov/my-zed/releases/download/v1.31.0-my.14/zed-linux-x86_64.tar.gz`
+      (no API rate limit). Windows build makes it a draft (~80 min after 20:20 UTC).
+- [ ] Install: download `zed-linux-x86_64.tar.gz`, extract, `rsync -a --delete zed.app/ ~/.local/my-zed.app/`,
+      verify `~/.local/my-zed.app/bin/zed --version` shows `77bb257`.
+      NOTE: `main` is one commit ahead (`263ee83`, test-only); binary still 77bb257.
+- [ ] Ask user to restart Zed and repeat the same auto-continue workload; compare
+      `memory usage: heap in-use` in `~/.local/share/my-zed/zed/logs/Zed.log`
+      (old build grew to ~4.4 GB heap in-use within one session).
+- [ ] Follow-up (not shipped): `AcpThread::shared_buffers: HashMap<Entity<Buffer>, BufferSnapshot>`
+      (`crates/acp_thread/src/acp_thread.rs:3788`) is an unbounded strong-retention
+      cache, but only external-agent (ACP) fs handlers populate it, NOT the
+      built-in agent, so it does not explain the user's heap.
+- [ ] Follow-up candidate: reviewed/kept tracked buffers (edited files) are still
+      retained forever; if edited-file count is large, prune entries with no
+      unreviewed edits after review.
