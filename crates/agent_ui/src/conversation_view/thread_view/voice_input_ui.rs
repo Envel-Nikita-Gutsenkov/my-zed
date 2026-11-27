@@ -105,7 +105,6 @@ impl VoiceInputState {
     }
 }
 
-
 impl ThreadView {
     /// The microphone toggle plus a small chevron that opens the dictation
     /// settings menu.
@@ -835,10 +834,11 @@ impl ThreadView {
                 .border_color(cx.theme().colors().border_variant)
                 .child(Icon::new(icon).size(IconSize::XSmall).color(color))
                 .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .child(Label::new(notice.text.clone()).size(LabelSize::XSmall).color(color)),
+                    div().flex_1().min_w_0().child(
+                        Label::new(notice.text.clone())
+                            .size(LabelSize::XSmall)
+                            .color(color),
+                    ),
                 )
                 .child(actions)
                 .into_any_element(),

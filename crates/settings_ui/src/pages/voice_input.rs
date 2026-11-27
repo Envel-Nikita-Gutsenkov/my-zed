@@ -470,9 +470,12 @@ fn render_engine_row(engine: VoiceInputEngine, cx: &mut App) -> AnyElement {
             .size(LabelSize::XSmall)
             .color(Color::Success)
     } else if downloading {
-        Label::new(format!("Downloading… {}", format_bytes(status.as_ref().map_or(0, |s| s.downloaded))))
-            .size(LabelSize::XSmall)
-            .color(Color::Muted)
+        Label::new(format!(
+            "Downloading… {}",
+            format_bytes(status.as_ref().map_or(0, |s| s.downloaded))
+        ))
+        .size(LabelSize::XSmall)
+        .color(Color::Muted)
     } else if failed {
         Label::new("Download failed")
             .size(LabelSize::XSmall)

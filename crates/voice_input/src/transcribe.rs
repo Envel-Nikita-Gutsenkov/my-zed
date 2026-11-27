@@ -366,11 +366,19 @@ impl std::error::Error for TranscriptionFailure {}
 /// A short, actionable explanation for the statuses a user can actually fix.
 fn status_hint(status: u16) -> Option<&'static str> {
     Some(match status {
-        401 => "The API key was rejected. Check `voice_input.cloud.api_key` and that the key is stored in your keychain.",
-        403 => "The account is not allowed to use this model or provider. Check the model name and the allow-list for your API key.",
-        404 => "The endpoint or model was not found. Check `voice_input.cloud.endpoint` and `voice_input.cloud.model`.",
+        401 => {
+            "The API key was rejected. Check `voice_input.cloud.api_key` and that the key is stored in your keychain."
+        }
+        403 => {
+            "The account is not allowed to use this model or provider. Check the model name and the allow-list for your API key."
+        }
+        404 => {
+            "The endpoint or model was not found. Check `voice_input.cloud.endpoint` and `voice_input.cloud.model`."
+        }
         413 => "The recording is too large for this endpoint. Lower `voice_input.chunk_secs`.",
-        429 => "Rate limited or out of credit. Check your balance, and raise `voice_input.cloud.retries` if the limit is transient.",
+        429 => {
+            "Rate limited or out of credit. Check your balance, and raise `voice_input.cloud.retries` if the limit is transient."
+        }
         _ => return None,
     })
 }

@@ -280,11 +280,8 @@ pub fn binaries_dir() -> PathBuf {
 /// Finds a whisper.cpp binary, checking the managed install directory and then
 /// `PATH`.
 pub fn whisper_binary() -> Option<PathBuf> {
-    find_executable(&binaries_dir(), WHISPER_BINARY_NAMES).or_else(|| {
-        WHISPER_BINARY_NAMES
-            .iter()
-            .find_map(|name| which(name))
-    })
+    find_executable(&binaries_dir(), WHISPER_BINARY_NAMES)
+        .or_else(|| WHISPER_BINARY_NAMES.iter().find_map(|name| which(name)))
 }
 
 /// Recursively searches `dir` for a file named like one of `names`.

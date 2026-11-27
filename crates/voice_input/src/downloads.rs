@@ -206,7 +206,9 @@ pub fn cancel_whisper_install(cx: &mut App) {
     if cx.try_global::<ModelDownloads>().is_none() {
         return;
     }
-    cx.global_mut::<ModelDownloads>().entries.remove(WHISPER_KEY);
+    cx.global_mut::<ModelDownloads>()
+        .entries
+        .remove(WHISPER_KEY);
     let dir = catalog::binaries_dir();
     cx.background_spawn(async move {
         if let Err(error) = std::fs::remove_dir_all(&dir) {

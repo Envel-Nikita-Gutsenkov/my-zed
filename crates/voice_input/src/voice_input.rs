@@ -24,8 +24,8 @@ use http_client::HttpClient;
 
 pub use catalog::{
     CLOUD_PRESETS, CloudPreset, DEFAULT_CLOUD_PRESET, DEFAULT_LOCAL_MODEL, Download, LOCAL_MODELS,
-    LocalEngine, LocalModelDef, cloud_preset, is_downloaded,
-    is_downloaded_by_id, local_model, model_dir, models_dir, resolve_binary, whisper_binary,
+    LocalEngine, LocalModelDef, cloud_preset, is_downloaded, is_downloaded_by_id, local_model,
+    model_dir, models_dir, resolve_binary, whisper_binary,
 };
 pub use downloads::{ModelDownload, ModelDownloadStatus};
 pub use downloads::{
@@ -33,7 +33,6 @@ pub use downloads::{
     is_any_downloading, start as start_model_download, start_whisper_install,
     status as model_download_status, whisper_binary_ready, whisper_install_status,
 };
-pub use text::{append_chunk, clean_chunk, prompt_tail};
 pub use local::{DownloadProgress, ensure_model, models_dir as local_models_dir, transcribe_local};
 pub use recorder::{
     AutoStopReason, InputDeviceInfo, Recorder, auto_stop_reason, input_devices, is_too_short,
@@ -46,6 +45,7 @@ pub use settings_content::{
     VoiceInputInsertion, VoiceInputLocalEngine, VoiceInputLocalSettingsContent, VoiceInputRouting,
     VoiceInputSettingsContent,
 };
+pub use text::{append_chunk, clean_chunk, prompt_tail};
 pub use transcribe::{CloudParams, keychain_endpoint, parse_credential_api_key, transcribe_cloud};
 /// Whether `model`'s files are present in the directory configured in settings.
 pub fn model_is_downloaded(settings: &VoiceInputSettings, model: &LocalModelDef) -> bool {

@@ -12,7 +12,6 @@
 /// Words at the start of a chunk that may repeat the end of the transcript.
 const MAX_OVERLAP_WORDS: usize = 12;
 
-
 /// Annotations a speech model emits for audio that contains no speech.
 const ANNOTATIONS: &[&str] = &[
     "blank_audio",
@@ -132,10 +131,7 @@ pub fn prompt_tail(text: &str, max_chars: usize) -> Option<String> {
     let cut = char_count - max_chars;
     let tail: String = text.chars().skip(cut).collect();
     // Only trim when the cut landed inside a word.
-    let started_at_word_boundary = text
-        .chars()
-        .nth(cut - 1)
-        .is_some_and(char::is_whitespace);
+    let started_at_word_boundary = text.chars().nth(cut - 1).is_some_and(char::is_whitespace);
     if started_at_word_boundary {
         let tail = tail.trim_start();
         return (!tail.is_empty()).then(|| tail.to_string());
@@ -212,7 +208,10 @@ fn normalize_word(word: &str) -> String {
 }
 
 fn is_tightening_punctuation(character: char) -> bool {
-    matches!(character, ',' | '.' | '!' | '?' | ';' | ':' | ')' | ']' | '»')
+    matches!(
+        character,
+        ',' | '.' | '!' | '?' | ';' | ':' | ')' | ']' | '»'
+    )
 }
 
 fn is_hallucination(text: &str) -> bool {
@@ -248,9 +247,9 @@ fn capitalize_first_word(text: &mut String) {
     if !first_character.is_lowercase() {
         return;
     }
-    if !characters.all(|character| {
-        character.is_lowercase() || matches!(character, '-' | '\'' | '’')
-    }) {
+    if !characters
+        .all(|character| character.is_lowercase() || matches!(character, '-' | '\'' | '’'))
+    {
         return;
     }
     if let Some(uppercase) = first_character.to_uppercase().next() {
@@ -283,14 +282,8 @@ fn strip_annotations(line: &str) -> String {
         let trailing = &after[end + closer.len_utf8()..];
         let drop = if inner.trim().is_empty() {
             // `()` glued to a word is part of a call such as `getUserName()`.
-            let standalone_before = result
-                .chars()
-                .next_back()
-                .is_none_or(char::is_whitespace);
-            let standalone_after = trailing
-                .chars()
-                .next()
-                .is_none_or(char::is_whitespace);
+            let standalone_before = result.chars().next_back().is_none_or(char::is_whitespace);
+            let standalone_after = trailing.chars().next().is_none_or(char::is_whitespace);
             standalone_before && standalone_after
         } else {
             is_annotation(inner)
@@ -381,7 +374,10 @@ mod tests {
     #[test]
     fn removes_overlap_that_differs_in_punctuation_and_case() {
         let mut transcript = String::from("Сколько стоит, дом?");
-        assert_eq!(append_chunk(&mut transcript, "Дом стоит дорого"), " стоит дорого");
+        assert_eq!(
+            append_chunk(&mut transcript, "Дом стоит дорого"),
+            " стоит дорого"
+        );
     }
 
     #[test]
@@ -414,7 +410,10 @@ mod tests {
     #[test]
     fn capitalises_a_new_sentence_across_a_chunk_boundary() {
         let mut transcript = String::from("Готово.");
-        assert_eq!(append_chunk(&mut transcript, "проверь тесты"), " Проверь тесты");
+        assert_eq!(
+            append_chunk(&mut transcript, "проверь тесты"),
+            " Проверь тесты"
+        );
         assert_eq!(transcript, "Готово. Проверь тесты");
 
         let mut transcript = String::from("Done!");
@@ -434,13 +433,22 @@ mod tests {
     fn drops_known_hallucinations() {
         assert_eq!(clean_chunk("Спасибо за просмотр."), "");
         assert_eq!(clean_chunk("Thanks for watching!"), "");
-        assert_eq!(clean_chunk("thanks for watching the build"), "thanks for watching the build");
+        assert_eq!(
+            clean_chunk("thanks for watching the build"),
+            "thanks for watching the build"
+        );
     }
 
     #[test]
     fn prompt_tail_is_cut_at_a_word_boundary() {
-        assert_eq!(prompt_tail("hello world", 100).as_deref(), Some("hello world"));
-        assert_eq!(prompt_tail("alpha beta gamma", 10).as_deref(), Some("beta gamma"));
+        assert_eq!(
+            prompt_tail("hello world", 100).as_deref(),
+            Some("hello world")
+        );
+        assert_eq!(
+            prompt_tail("alpha beta gamma", 10).as_deref(),
+            Some("beta gamma")
+        );
         assert_eq!(prompt_tail("averylongword", 4), None);
         assert_eq!(prompt_tail("   ", 10), None);
     }
