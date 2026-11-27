@@ -28,8 +28,8 @@ release workflow.
 - [x] Microphone picker in Settings → AI → Voice Input (`voice_input.device`).
 - [x] Released `v1.31.0-my.8` (device fallback) and `v1.31.0-my.9` (picker +
       config retry), installed my.9 into `~/.local/my-zed.app`.
-- [ ] Windows asset appears on the my.9 release once its ~2 h job finishes
-      (no action needed).
+- [x] Windows asset appeared on the my.9 release; the workflow completed
+      with both `zed-linux-x86_64.tar.gz` and `my-zed-x86_64.exe`.
 - [x] Make recording start resilient: `Recorder::start` takes a preference
       list and tries device → call device → system default → every enumerated
       input device, aggregating errors (tag `v1.31.0-my.8`).
