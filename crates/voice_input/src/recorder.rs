@@ -234,13 +234,13 @@ fn candidate_devices(preferred: &[DeviceId]) -> Vec<(String, cpal::Device)> {
     let host = cpal::default_host();
     let mut devices: Vec<(String, cpal::Device)> = Vec::new();
 
-    if let Some(device) = host.default_input_device() {
-        push_device(&mut devices, device);
-    }
     for id in preferred {
         if let Some(device) = host.device_by_id(id) {
             push_device(&mut devices, device);
         }
+    }
+    if let Some(device) = host.default_input_device() {
+        push_device(&mut devices, device);
     }
     match host.input_devices() {
         Ok(input_devices) => {
