@@ -1356,6 +1356,7 @@ mod tests {
             .update(cx, |project, cx| project.open_buffer(file_path, cx))
             .await
             .unwrap();
+        let weak_buffer = buffer.downgrade();
 
         cx.update(|cx| {
             action_log.update(cx, |log, cx| log.record_file_read(&buffer, cx));
@@ -1371,6 +1372,15 @@ mod tests {
             assert_eq!(log.changed_buffers(cx).count(), 0);
             assert_eq!(log.stale_buffers(cx).count(), 0);
         });
+
+        // The log must not hold a strong reference to the buffer either, otherwise the buffer and
+        // its parsed state would outlive the tool call that read it.
+        drop(buffer);
+        cx.run_until_parked();
+        assert!(
+            weak_buffer.upgrade().is_none(),
+            "record_file_read must not keep the buffer alive"
+        );
     }
 
     #[gpui::test(iterations = 10)]
