@@ -4,7 +4,7 @@
 based on upstream Zed `1.31.0`. This file describes how the fork differs from
 upstream Zed. It is not a chronological log: the fork ships as a single version.
 
-## 1.31.0-my.11
+## 1.31.0-my.12
 
 ### Voice input
 
