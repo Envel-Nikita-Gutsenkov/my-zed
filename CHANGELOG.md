@@ -4,6 +4,18 @@
 based on upstream Zed `1.31.0`. This file describes how the fork differs from
 upstream Zed. It is not a chronological log: the fork ships as a single version.
 
+## 1.31.0-my.9
+
+### Voice input
+
+- New microphone picker in `Settings → AI → Voice Input`. Every input device the
+  system reports is listed with the system default first, and picking one pins
+  it in `voice_input.device` without editing JSON. The page also names the
+  device dictation will use when the setting is empty.
+- If a microphone advertises a stream configuration it then refuses to start
+  (a common PipeWire/ALSA node mismatch), the remaining configurations it
+  supports are tried before falling back to another device.
+
 ## 1.31.0-my.8
 
 ### Voice input
