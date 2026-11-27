@@ -4,6 +4,20 @@
 based on upstream Zed `1.31.0`. This file describes how the fork differs from
 upstream Zed. It is not a chronological log: the fork ships as a single version.
 
+## 1.31.0-my.13
+
+### Agent
+
+- Token usage statistics no longer undercount multi-step turns. Every model
+  request in a turn is now recorded as its own usage row, so the statistics page
+  sums all tool-call steps instead of collapsing the turn to a single step's
+  tokens. Rows recorded before this build stay undercounted; honest totals begin
+  with the first turn after installing it.
+- A queued message is now sent when a turn ends normally even if the queue had
+  been left paused by an earlier error or stop, instead of waiting for the user
+  to send a new message to re-arm it. Manual stops and errors still keep the
+  queue paused, and a stale pause no longer blocks later clean turns.
+
 ## 1.31.0-my.12
 
 ### Voice input

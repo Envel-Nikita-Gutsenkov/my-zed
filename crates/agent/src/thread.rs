@@ -1937,6 +1937,11 @@ pub struct Thread {
     /// `cumulative_token_usage` for the in-flight completion request. Reset at
     /// the start of each request.
     current_request_token_usage: TokenUsage,
+    /// Monotonically increasing counter bumped whenever a new completion request
+    /// starts. A single user turn issues many requests (one per tool-call step),
+    /// so usage statistics are keyed by this to keep each request's tokens in a
+    /// separate row instead of collapsing them to a per-turn maximum.
+    request_seq: u64,
     /// Estimated tokens that context-saving transformations avoided sending for
     /// the most recently built completion request.
     last_request_saved_tokens: Cell<u64>,
@@ -2098,6 +2103,7 @@ impl Thread {
             context_usage: None,
             cumulative_token_usage: TokenUsage::default(),
             current_request_token_usage: TokenUsage::default(),
+            request_seq: 0,
             last_request_saved_tokens: Cell::new(0),
             pending_compaction_telemetry: None,
             initial_project_snapshot: {
@@ -2562,6 +2568,7 @@ impl Thread {
             context_usage,
             cumulative_token_usage: db_thread.cumulative_token_usage,
             current_request_token_usage: TokenUsage::default(),
+            request_seq: 0,
             last_request_saved_tokens: Cell::new(0),
             pending_compaction_telemetry: None,
             initial_project_snapshot: Task::ready(db_thread.initial_project_snapshot).shared(),
@@ -3170,10 +3177,25 @@ impl Thread {
         self.record_token_usage_stats(cx);
     }
 
+    /// Starts a fresh completion request's usage accounting. Bumps
+    /// `request_seq` so the request's tokens land in their own usage-stats row.
+    fn begin_request_token_usage(&mut self) {
+        self.request_seq = self.request_seq.wrapping_add(1);
+        self.current_request_token_usage = TokenUsage::default();
+    }
+
+    /// Identifies the current completion request in the usage-stats database.
+    /// A turn can issue many requests (one per tool-call step); each needs its
+    /// own row so the stats sum them instead of keeping only the largest.
+    fn usage_stats_request_id(&self) -> String {
+        format!("{}:{}:{}", self.id(), self.prompt_id, self.request_seq)
+    }
+
     /// Appends the accounted usage of the current request to the usage stats
-    /// database, keyed by the user message that started it. This is an upsert
-    /// that keeps the maximum observed values, so streaming usage updates are
-    /// recorded faithfully without duplicating rows.
+    /// database, keyed by the user message and request sequence. This is an
+    /// upsert that keeps the maximum observed values, so streaming usage updates
+    /// within one request are recorded faithfully without duplicating rows,
+    /// while distinct requests (e.g. tool-call steps) accumulate separately.
     fn record_token_usage_stats(&self, cx: &mut Context<Self>) {
         let Some(model) = self.model() else {
             return;
@@ -3188,7 +3210,7 @@ impl Thread {
             return;
         }
         let event = crate::db::TokenUsageEvent {
-            request_id: format!("{}:{}", self.id(), self.prompt_id),
+            request_id: self.usage_stats_request_id(),
             created_at: chrono::Utc::now().timestamp(),
             input_tokens: usage.input_tokens,
             output_tokens: usage.output_tokens,
@@ -3478,7 +3500,7 @@ impl Thread {
         let compaction = target.map(|request_end_ix| {
             self.advance_prompt_id();
             let request = self.build_compaction_request(request_end_ix, &model, cx);
-            self.current_request_token_usage = TokenUsage::default();
+            self.begin_request_token_usage();
             (model.clone(), request)
         });
 
@@ -3802,7 +3824,7 @@ impl Thread {
                 let provider = LanguageModelRegistry::read_global(cx).provider_for_model(&model);
                 this.refresh_turn_tools(cx);
                 let request = this.build_completion_request(intent, cx)?;
-                this.current_request_token_usage = TokenUsage::default();
+                this.begin_request_token_usage();
                 anyhow::Ok((model, provider, request))
             })??;
 
@@ -4155,7 +4177,7 @@ impl Thread {
             let insertion_ix = this.compaction_message_target_ix(cx)?;
             let model = this.compaction_model(cx)?;
             let request = this.build_compaction_request(insertion_ix, &model, cx);
-            this.current_request_token_usage = TokenUsage::default();
+            this.begin_request_token_usage();
             // Preserve telemetry across retries so the retry count keeps
             // accumulating rather than resetting on each attempt.
             if this.pending_compaction_telemetry.is_none() {
@@ -10201,6 +10223,25 @@ mod tests {
         fake.send_text(&compaction_model, &request, "summary");
         fake.end_stream(&compaction_model, &request);
         cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    async fn test_usage_stats_request_id_is_unique_per_request(cx: &mut TestAppContext) {
+        let (thread, _event_stream, _fake) = setup_thread_for_test(cx).await;
+        cx.update(|cx| {
+            thread.update(cx, |thread, _cx| {
+                // A turn issues one request per tool-call step while the prompt id
+                // stays fixed, so the stats id must still differ per request.
+                let first = thread.usage_stats_request_id();
+                thread.begin_request_token_usage();
+                let second = thread.usage_stats_request_id();
+                thread.begin_request_token_usage();
+                let third = thread.usage_stats_request_id();
+                assert_ne!(first, second);
+                assert_ne!(second, third);
+                assert_ne!(first, third);
+            });
+        });
     }
 
     #[gpui::test]

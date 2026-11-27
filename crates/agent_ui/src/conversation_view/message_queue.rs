@@ -233,4 +233,16 @@ impl MessageQueue {
     pub fn resume(&mut self) {
         self.processing_state = ProcessingState::AutoProcess;
     }
+
+    /// Re-enables auto-processing only if the queue was left paused, without
+    /// disturbing an in-flight cancel-absorbing state.
+    ///
+    /// A pause can outlive the turn that caused it (for example an earlier
+    /// error pauses the queue and nothing resumes it), which would silently
+    /// strand queued messages across subsequent clean turns.
+    pub fn resume_if_paused(&mut self) {
+        if matches!(self.processing_state, ProcessingState::Paused) {
+            self.processing_state = ProcessingState::AutoProcess;
+        }
+    }
 }

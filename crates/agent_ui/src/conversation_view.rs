@@ -2418,6 +2418,16 @@ impl ConversationView {
                     return;
                 }
 
+                // A queue pause caused by an earlier event (an error, a manual
+                // stop) otherwise outlives this clean turn and silently strands
+                // queued messages. Re-arm it before attempting the auto-send so
+                // the queue does not require a new user message to drain.
+                if *stop_reason == Some(acp_v2::StopReason::EndTurn)
+                    && let Some(active) = self.thread_view(&session_id)
+                {
+                    active.update(cx, |active, _cx| active.message_queue.resume_if_paused());
+                }
+
                 let sent_queued_message = self.send_queued_after_confirmed_idle(window, cx);
 
                 // Skip notifying when a queued message was just auto-sent: the agent
