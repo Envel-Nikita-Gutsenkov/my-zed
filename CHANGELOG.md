@@ -32,6 +32,9 @@ upstream Zed. It is not a chronological log: the fork ships as a single version.
   invented credits on silent microphone input.
 - `whisper.cpp` is now invoked with previous-text conditioning disabled, so a
   noisy take no longer degenerates into repeated sentences.
+- Windows: the managed `whisper.cpp` download now builds again. The command that
+  starts it without flashing a console window needs `async-process`'s
+  `CommandExt`, not `std`'s, which broke the Windows release build.
 
 ### Agent
 

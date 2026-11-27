@@ -191,7 +191,9 @@ fn hidden_command(binary: &Path) -> Command {
     let mut command = Command::new(binary);
     #[cfg(windows)]
     {
-        use std::os::windows::process::CommandExt as _;
+        // `Command` here is smol's, so the trait has to come from smol's
+        // re-exported `async-process`; std's `CommandExt` does not apply to it.
+        use smol::process::windows::CommandExt as _;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         command.creation_flags(CREATE_NO_WINDOW);
     }
