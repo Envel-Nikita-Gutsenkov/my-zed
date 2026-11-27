@@ -45,7 +45,7 @@ pub use settings_content::{
     VoiceInputInsertion, VoiceInputLocalEngine, VoiceInputLocalSettingsContent, VoiceInputRouting,
     VoiceInputSettingsContent,
 };
-pub use text::{append_chunk, clean_chunk, prompt_tail};
+pub use text::{append_chunk, clean_chunk, needs_leading_space, prompt_tail};
 pub use transcribe::{CloudParams, keychain_endpoint, parse_credential_api_key, transcribe_cloud};
 /// Whether `model`'s files are present in the directory configured in settings.
 pub fn model_is_downloaded(settings: &VoiceInputSettings, model: &LocalModelDef) -> bool {

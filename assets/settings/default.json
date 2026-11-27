@@ -1227,16 +1227,7 @@
       // Thinking effort, when the model supports it.
       "effort": "low",
     },
-    // The model used for context compaction. Defaults to the default model when unset.
-    "compaction_model": {
-      "provider": "Command Code Compact",
-      "model": "deepseek/deepseek-v4.1-flash",
-    },
-    // The model used to summarize threads (titles, etc.).
-    "thread_summary_model": {
-      "provider": "Command Code Compact",
-      "model": "deepseek/deepseek-v4.1-flash",
-    },
+
     // Additional parameters for language model requests. When making a request to a model, parameters will be taken
     // from the last entry in this list that matches the model's provider and name. In each entry, both provider
     // and model are optional, so that you can specify parameters for either one.
@@ -2918,26 +2909,7 @@
           },
         ],
       },
-      "Command Code Compact": {
-        "api_url": "https://api.commandcode.ai/provider/v1",
-        "available_models": [
-          {
-            "name": "deepseek/deepseek-v4.1-flash",
-            "display_name": "DeepSeek V4.1 Flash (latest) (compaction)",
-            "max_tokens": 1000000,
-            "max_output_tokens": 32000,
-            "capabilities": {
-              "tools": true,
-              "images": true,
-              "parallel_tool_calls": false,
-              "prompt_cache_key": false,
-              "chat_completions": true,
-              "interleaved_reasoning": false,
-              "max_tokens_parameter": false,
-            },
-          },
-        ],
-      },
+
       "DeepSeek Direct": {
         "api_url": "https://api.deepseek.com/v1",
         "available_models": [

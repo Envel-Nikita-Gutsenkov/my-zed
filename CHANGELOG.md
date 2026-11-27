@@ -4,7 +4,7 @@
 based on upstream Zed `1.31.0`. This file describes how the fork differs from
 upstream Zed. It is not a chronological log: the fork ships as a single version.
 
-## 1.31.0-my.10
+## 1.31.0-my.11
 
 ### Voice input
 
@@ -26,6 +26,20 @@ upstream Zed. It is not a chronological log: the fork ships as a single version.
   hallucinations ("Thanks for watching", "Продолжение следует", subtitle
   credits) and non-speech annotations (`[BLANK_AUDIO]`, `(music)`, `♪`) are
   dropped instead of inserted.
+- Leading and trailing silence is trimmed before transcription and a recording
+  that contains no audio above the silence threshold is reported as "nothing to
+  transcribe" instead of being sent to the model, which used to produce
+  invented credits on silent microphone input.
+- `whisper.cpp` is now invoked with previous-text conditioning disabled, so a
+  noisy take no longer degenerates into repeated sentences.
+
+### Agent
+
+- Context compaction and thread summaries no longer use a pinned "Command Code
+  Compact" provider. Both were pointing at a separate provider entry even though
+  they used the same model, so `/compact` went through a provider unrelated to the
+  one the panel was using (and needed its own credentials). With the overrides
+  removed they fall back to the default model, as upstream does.
 
 ## 1.31.0-my.9
 

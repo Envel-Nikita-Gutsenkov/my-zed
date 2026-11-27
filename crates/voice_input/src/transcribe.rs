@@ -97,7 +97,8 @@ impl CloudParams {
             .as_deref()
             .map(str::trim)
             .filter(|slug| !slug.is_empty())
-            .map(str::to_string);
+            .map(str::to_string)
+            .filter(|_| preset.supports_provider_routing);
         let routing = cloud.routing();
         let timeout_secs = cloud.timeout_secs();
 
@@ -221,23 +222,31 @@ pub async fn transcribe_cloud(
     // Aggregators let the request name the provider to use. A pin is useful for
     // cost, but it hard-fails when the account is not allowed to use that
     // provider, so an unpinned attempt always follows a pinned one.
-    let mut pins: Vec<Option<String>> = Vec::new();
-    if let Some(forced) = params.forced_provider.clone() {
-        pins.push(Some(forced));
-    } else if params.pick_cheapest_provider {
+    let forced = params.forced_provider.clone();
+    let cheapest = if forced.is_none() && params.pick_cheapest_provider {
         match cheapest_provider(client, params).await {
-            Ok(Some(pin)) => pins.push(Some(pin)),
-            Ok(None) => {}
-            Err(error) => log::warn!(
-                "voice input: could not determine the cheapest provider, routing freely: {error:#}"
-            ),
+            Ok(pin) => pin,
+            Err(error) => {
+                log::warn!(
+                    "voice input: could not determine the cheapest provider, routing freely: {error:#}"
+                );
+                None
+            }
         }
-    }
-    if params.supports_provider_routing && !pins.iter().any(Option::is_none) {
-        pins.push(None);
-    }
+    } else {
+        None
+    };
+    let pins = provider_pins(forced, cheapest);
 
     let url = format!("{}/audio/transcriptions", params.endpoint);
+    if params.api_key.is_none() && endpoint_requires_key(&params.endpoint) {
+        anyhow::bail!(
+            "The cloud engine has no API key for {}. Set `voice_input.cloud.api_key` or the \
+             preset's environment variable, or switch Settings → AI → Voice Input to the local \
+             engine.",
+            params.endpoint
+        );
+    }
     let attempts = params.retries.saturating_add(1);
     let mut last_error = None;
 
@@ -268,6 +277,41 @@ pub async fn transcribe_cloud(
     }
 
     Err(last_error.unwrap_or_else(|| anyhow!("transcription request was not attempted")))
+}
+
+/// Whether a request to `endpoint` is expected to carry an API key. Self-hosted
+/// servers on the loopback address usually do not check one.
+fn endpoint_requires_key(endpoint: &str) -> bool {
+    let rest = endpoint
+        .split_once("://")
+        .map_or(endpoint, |(_, rest)| rest);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let host_port = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    let host = host_port
+        .rsplit_once(':')
+        .filter(|(_, port)| port.chars().all(|c| c.is_ascii_digit()))
+        .map_or(host_port, |(host, _)| host);
+    !matches!(
+        host,
+        "localhost" | "127.0.0.1" | "0.0.0.0" | "[::1]" | "::1"
+    )
+}
+
+/// Provider pins attempted in order: the pinned provider (explicit or cheapest)
+/// first, then an unpinned request. The unpinned request is also the only attempt
+/// for endpoints that do not route providers at all, so it is always present.
+fn provider_pins(forced: Option<String>, cheapest: Option<String>) -> Vec<Option<String>> {
+    let mut pins = Vec::new();
+    match forced.or(cheapest) {
+        Some(pin) => {
+            pins.push(Some(pin));
+            pins.push(None);
+        }
+        None => pins.push(None),
+    }
+    pins
 }
 
 async fn send_transcription(
@@ -588,6 +632,34 @@ mod tests {
             ]}
         });
         assert_eq!(pick_cheapest_provider(&value), Some("Cheap".to_string()));
+    }
+
+    #[test]
+    fn endpoints_without_routing_get_a_single_unpinned_attempt() {
+        assert_eq!(provider_pins(None, None), vec![None]);
+    }
+
+    #[test]
+    fn only_remote_endpoints_require_an_api_key() {
+        assert!(endpoint_requires_key("https://api.groq.com/openai/v1"));
+        assert!(endpoint_requires_key(
+            "https://user:pass@example.com:8443/v1"
+        ));
+        assert!(!endpoint_requires_key("http://localhost:8080/v1"));
+        assert!(!endpoint_requires_key("http://127.0.0.1:8080/v1"));
+        assert!(!endpoint_requires_key("http://[::1]:8080/v1"));
+    }
+
+    #[test]
+    fn a_pinned_provider_is_tried_before_routing_freely() {
+        assert_eq!(
+            provider_pins(Some("Groq".to_string()), None),
+            vec![Some("Groq".to_string()), None]
+        );
+        assert_eq!(
+            provider_pins(None, Some("Cheap".to_string())),
+            vec![Some("Cheap".to_string()), None]
+        );
     }
 
     #[test]

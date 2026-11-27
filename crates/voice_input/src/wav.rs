@@ -98,8 +98,35 @@ pub fn split_and_encode(
     split_mono_and_encode(&resampled, chunk_secs, silence_threshold)
 }
 
+/// Encoded chunks are preceded and followed by this much audio so the model
+/// still hears a natural onset and release instead of a hard cut.
+const SILENCE_PADDING_SAMPLES: usize = 1_600; // 100 ms at 16 kHz
+
+/// Range of `pcm` that contains speech, with a little padding. The end points
+/// snap to 10 ms frames so a trimmed chunk does not start mid-word.
+fn trim_silence(pcm: &[f32], silence_threshold: f32) -> &[f32] {
+    const FRAME: usize = 160; // 10 ms at 16 kHz
+    let is_loud = |frame: &[f32]| frame.iter().any(|sample| sample.abs() > silence_threshold);
+
+    let first = pcm.chunks(FRAME).position(is_loud);
+    let last = pcm.chunks(FRAME).rposition(is_loud);
+    let (Some(first), Some(last)) = (first, last) else {
+        return &pcm[..0];
+    };
+
+    let start = (first * FRAME).saturating_sub(SILENCE_PADDING_SAMPLES);
+    let end = ((last + 1) * FRAME + SILENCE_PADDING_SAMPLES).min(pcm.len());
+    &pcm[start..end]
+}
+
 /// Splits 16 kHz mono samples into chunks and encodes each as a WAV.
+///
+/// Leading and trailing silence is trimmed first: the model tends to invent
+/// subtitle credits and other text when it is fed dead air, and trimming also
+/// keeps the request small. Audio that never rises above the threshold yields
+/// no chunks at all.
 pub fn split_mono_and_encode(pcm: &[f32], chunk_secs: u64, silence_threshold: f32) -> Vec<Vec<u8>> {
+    let pcm = trim_silence(pcm, silence_threshold);
     if pcm.is_empty() {
         return Vec::new();
     }
@@ -189,6 +216,27 @@ mod tests {
         let pcm = loud_signal(TARGET_SAMPLE_RATE as usize * 300);
         let chunks = split_mono_and_encode(&pcm, 0, 0.02);
         assert_eq!(chunks.len(), 1);
+    }
+
+    #[test]
+    fn silence_is_trimmed_away_entirely() {
+        let pcm = vec![0.0_f32; TARGET_SAMPLE_RATE as usize * 5];
+        assert!(split_mono_and_encode(&pcm, 120, 0.02).is_empty());
+    }
+
+    #[test]
+    fn surrounding_silence_is_trimmed() {
+        let rate = TARGET_SAMPLE_RATE as usize;
+        let mut pcm = vec![0.0_f32; rate];
+        pcm.extend(loud_signal(rate / 2));
+        pcm.extend(vec![0.0_f32; rate]);
+
+        let trimmed = trim_silence(&pcm, 0.02);
+        assert!(trimmed.len() < pcm.len());
+        assert!(trimmed.len() > rate / 2);
+        assert!(
+            (trimmed.len() as i64 - (rate / 2 + 2 * SILENCE_PADDING_SAMPLES) as i64).abs() <= 320
+        );
     }
 
     #[test]

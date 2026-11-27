@@ -42,7 +42,9 @@ pub const CLOUD_PRESETS: &[CloudPreset] = &[
         endpoint: "",
         model: "",
         api_key_env: "MYZED_VOICE_API_KEY",
-        supports_provider_routing: false,
+        // A custom endpoint may be an aggregator such as OpenRouter, which is
+        // the only way provider routing still applies to a preset.
+        supports_provider_routing: true,
     },
 ];
 
@@ -280,8 +282,13 @@ pub fn binaries_dir() -> PathBuf {
 /// Finds a whisper.cpp binary, checking the managed install directory and then
 /// `PATH`.
 pub fn whisper_binary() -> Option<PathBuf> {
-    find_executable(&binaries_dir(), WHISPER_BINARY_NAMES)
-        .or_else(|| WHISPER_BINARY_NAMES.iter().find_map(|name| which(name)))
+    find_executable(&binaries_dir(), WHISPER_BINARY_NAMES).or_else(|| {
+        // `main` is only a name inside an unpacked whisper.cpp archive; picking
+        // it up from `PATH` would find an unrelated program.
+        ["whisper-cli", "whisper-cpp"]
+            .iter()
+            .find_map(|name| which(name))
+    })
 }
 
 /// Recursively searches `dir` for a file named like one of `names`.

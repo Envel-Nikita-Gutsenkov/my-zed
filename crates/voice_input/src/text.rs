@@ -40,7 +40,6 @@ const ANNOTATIONS: &[&str] = &[
 const HALLUCINATIONS: &[&str] = &[
     "thanks for watching",
     "thank you for watching",
-    "thanks for watching!",
     "subscribe to my channel",
     "please subscribe",
     "продолжение следует",
@@ -50,6 +49,19 @@ const HALLUCINATIONS: &[&str] = &[
     "субтитры создавал",
     "редактор субтитров",
     "корректор",
+    "подпишись на канал",
+];
+
+/// Credit rolls hallucinated on silence, matched as a prefix because whisper
+/// appends the names of the invented crew to them. A real dictation never opens
+/// with these phrases.
+const HALLUCINATION_PREFIXES: &[&str] = &[
+    "редактор субтитров",
+    "корректор",
+    "субтитры сделал",
+    "субтитры создавал",
+    "субтитры подготовил",
+    "продолжение следует",
 ];
 
 /// Removes non-speech annotations and normalises whitespace in one chunk.
@@ -144,6 +156,20 @@ pub fn prompt_tail(text: &str, max_chars: usize) -> Option<String> {
     (!tail.is_empty()).then(|| tail.to_string())
 }
 
+/// Whether `text` must be preceded by a space when inserted after `existing`
+/// so that two words do not fuse into one.
+pub fn needs_leading_space(existing: &str, text: &str) -> bool {
+    let Some(last) = existing.chars().next_back() else {
+        return false;
+    };
+    if last.is_whitespace() {
+        return false;
+    }
+    text.chars().next().is_some_and(|first| {
+        first.is_alphanumeric() || matches!(first, '"' | '\'' | '(' | '[' | '\u{ab}' | '\u{201e}')
+    })
+}
+
 /// Number of whole words at the start of `chunk` that repeat the end of
 /// `transcript`.
 fn overlap_words(transcript: &str, chunk: &str) -> usize {
@@ -222,6 +248,9 @@ fn is_hallucination(text: &str) -> bool {
         .collect();
     let normalized = collapse_whitespace(&normalized);
     HALLUCINATIONS.contains(&normalized.as_str())
+        || HALLUCINATION_PREFIXES
+            .iter()
+            .any(|prefix| normalized.starts_with(*prefix))
 }
 
 /// Whether the text ends a sentence (possibly inside closing quotes or
@@ -352,6 +381,17 @@ mod tests {
     }
 
     #[test]
+    fn detects_when_inserted_text_needs_a_leading_space() {
+        assert!(needs_leading_space("hello", "world"));
+        assert!(needs_leading_space("say:", "\"quoted\""));
+        assert!(!needs_leading_space("hello ", "world"));
+        assert!(!needs_leading_space("", "world"));
+        assert!(!needs_leading_space("hello\n", "world"));
+        assert!(!needs_leading_space("hello", ", and"));
+        assert!(!needs_leading_space("hello", ""));
+    }
+
+    #[test]
     fn strips_leading_segment_markers() {
         assert_eq!(clean_chunk(">> hello there"), "hello there");
     }
@@ -437,6 +477,16 @@ mod tests {
             clean_chunk("thanks for watching the build"),
             "thanks for watching the build"
         );
+    }
+
+    #[test]
+    fn drops_hallucinated_credit_rolls() {
+        assert_eq!(
+            clean_chunk("Редактор субтитров А.Синецкая Корректор А.Син"),
+            ""
+        );
+        assert_eq!(clean_chunk("Продолжение следует..."), "");
+        assert_eq!(clean_chunk("Субтитры подготовил Иван Петров"), "");
     }
 
     #[test]

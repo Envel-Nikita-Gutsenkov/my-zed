@@ -572,7 +572,7 @@ impl ThreadView {
 
         if chunks.is_empty() {
             self.set_voice_notice(
-                VoiceNotice::error("Recording was too short to transcribe"),
+                VoiceNotice::info("No speech was detected in that recording"),
                 cx,
             );
             return;
@@ -753,8 +753,20 @@ impl ThreadView {
                     voice_input::save_recordings(&take.chunks).log_err();
                 }
                 self.last_voice_take = None;
-                self.voice_notice = None;
-                if auto_submit {
+                if take.transcript.is_empty() && completed > 0 {
+                    // Every chunk came back empty or was filtered as a hallucination,
+                    // which usually means the microphone only picked up noise.
+                    self.set_voice_notice(
+                        VoiceNotice::info(
+                            "Nothing was transcribed: the recording was silence or noise. Check \
+                             the microphone in Settings → AI → Voice Input.",
+                        ),
+                        cx,
+                    );
+                } else {
+                    self.voice_notice = None;
+                }
+                if auto_submit && !take.transcript.is_empty() {
                     self.send(window, cx);
                 }
             }
@@ -763,8 +775,14 @@ impl ThreadView {
     }
 
     fn insert_voice_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let text = if voice_input::needs_leading_space(&self.message_editor.read(cx).text(cx), text)
+        {
+            format!(" {text}")
+        } else {
+            text.to_string()
+        };
         self.message_editor.update(cx, |editor, cx| {
-            editor.insert_text(text, window, cx);
+            editor.insert_text(&text, window, cx);
             editor.focus_handle(cx).focus(window, cx);
         });
     }

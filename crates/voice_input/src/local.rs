@@ -317,6 +317,11 @@ async fn run_whisper_cpp(
         .arg(wav_path)
         .arg("-l")
         .arg(language)
+        // Each chunk is a fresh process with its own short audio, so feeding the
+        // model its own earlier output only invites repetition loops and
+        // invented subtitle credits.
+        .arg("-mc")
+        .arg("0")
         .arg("-np")
         .arg("-nt");
     if let Some(threads) = threads {
