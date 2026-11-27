@@ -81,14 +81,11 @@ as `v1.31.0-my.14`.
 
 ## Next
 
-- [ ] Tag `v1.31.0-my.14` (commit `77bb257`) is pushed; release run 46062902579 is
-      building. Poll the direct asset URL (HEAD 200 ⇒ published):
-      `https://github.com/Envel-Nikita-Gutsenkov/my-zed/releases/download/v1.31.0-my.14/zed-linux-x86_64.tar.gz`
-      (no API rate limit). Windows build makes it a draft (~80 min after 20:20 UTC).
-- [ ] Install: download `zed-linux-x86_64.tar.gz`, extract, `rsync -a --delete zed.app/ ~/.local/my-zed.app/`,
-      verify `~/.local/my-zed.app/bin/zed --version` shows `77bb257`.
-      NOTE: `main` is one commit ahead (`263ee83`, test-only); binary still 77bb257.
-- [ ] Ask user to restart Zed and repeat the same auto-continue workload; compare
+- [x] Tag `v1.31.0-my.14` (commit `77bb257`) release published; Linux asset downloaded.
+- [x] Installed: `rsync -a --delete zed.app/ ~/.local/my-zed.app/`; `--version` = `77bb257`.
+      NOTE: `main` is ahead (`263ee83` test-only, `e40c7a6` task log); binary is 77bb257.
+- [ ] Ask user to restart Zed (old process is `my.12`) and repeat the same
+      auto-continue workload; compare
       `memory usage: heap in-use` in `~/.local/share/my-zed/zed/logs/Zed.log`
       (old build grew to ~4.4 GB heap in-use within one session).
 - [ ] Follow-up (not shipped): `AcpThread::shared_buffers: HashMap<Entity<Buffer>, BufferSnapshot>`
