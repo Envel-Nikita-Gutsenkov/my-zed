@@ -23,7 +23,12 @@ release workflow.
       (clean); `cargo test -p voice_input` (26 pass).
 - [x] Commit, tag `v1.31.0-my.7`, push, verify release assets, install into
       `~/.local/my-zed.app`.
-- [ ] Windows asset appears on the my.7 release once its ~2 h job finishes
+- [x] Microphone resilience: iterate over configured / audio-setting / default /
+      enumerated devices, retry rejected stream configs, log the device used.
+- [x] Microphone picker in Settings → AI → Voice Input (`voice_input.device`).
+- [x] Released `v1.31.0-my.8` (device fallback) and `v1.31.0-my.9` (picker +
+      config retry), installed my.9 into `~/.local/my-zed.app`.
+- [ ] Windows asset appears on the my.9 release once its ~2 h job finishes
       (no action needed).
 - [x] Make recording start resilient: `Recorder::start` takes a preference
       list and tries device → call device → system default → every enumerated
