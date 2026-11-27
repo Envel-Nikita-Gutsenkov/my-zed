@@ -8879,6 +8879,28 @@ mod tests {
             ));
         }
 
+        let before = estimate_request_tokens(&messages);
+
+        // Settings the user had before adding the input/ephemeral passes: only
+        // per-tool truncation and recent-turn protection. This documents that
+        // the older configuration leaves most of the request untouched.
+        let mut user_settings = savings_settings();
+        user_settings.keep_recent_turns = 12;
+        user_settings.old_tool_output_token_limit = 600;
+        user_settings.strip_old_thinking = true;
+        user_settings.strip_old_thinking_turns = 40;
+        let mut user_messages = messages.clone();
+        apply_token_savings(&mut user_messages, &user_settings);
+        let user_after = estimate_request_tokens(&user_messages);
+        assert!(
+            user_after < before,
+            "truncation alone must still remove some content: before={before} after={user_after}"
+        );
+        assert!(
+            user_after > before * 3 / 4,
+            "truncation alone must not pretend to remove most of the request: before={before} after={user_after}"
+        );
+
         let mut settings = savings_settings();
         settings.keep_recent_turns = 2;
         settings.old_tool_output_token_limit = 400;
@@ -8886,13 +8908,16 @@ mod tests {
         settings.strip_old_thinking = true;
         settings.strip_old_thinking_turns = 2;
 
-        let before = estimate_request_tokens(&messages);
         apply_token_savings(&mut messages, &settings);
         let after = estimate_request_tokens(&messages);
 
         assert!(
             after < before / 3,
             "savings should cut the request by at least two thirds: before={before} after={after}"
+        );
+        assert!(
+            after < user_after / 2,
+            "the input/ephemeral passes should roughly halve what truncation alone leaves: user_after={user_after} after={after}"
         );
 
         let omitted_inputs = messages
