@@ -25,6 +25,9 @@ release workflow.
       `~/.local/my-zed.app`.
 - [ ] Windows asset appears on the my.7 release once its ~2 h job finishes
       (no action needed).
+- [x] Make recording start resilient: `Recorder::start` takes a preference
+      list and tries device → call device → system default → every enumerated
+      input device, aggregating errors (tag `v1.31.0-my.8`).
 
 ## Findings
 
@@ -48,6 +51,8 @@ release workflow.
   `zed.app`), verify with `bin/zed --version`.
 - Commit `2ed289d` (API-key availability display + mic error hints) landed on
   `main` after the `my.7` tag, so it ships in the next release.
+- This cpal fork (`RustAudio/cpal` rev e1612d5) has no `DeviceTrait::name`;
+  use `description()?.name()` for a human-readable device name.
 
 ## Structure
 

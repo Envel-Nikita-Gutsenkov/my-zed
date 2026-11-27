@@ -4,6 +4,16 @@
 based on upstream Zed `1.31.0`. This file describes how the fork differs from
 upstream Zed. It is not a chronological log: the fork ships as a single version.
 
+## 1.31.0-my.8
+
+### Voice input
+
+- Starting a recording now tries every available microphone before giving up:
+  the device from `voice_input.device`, then the call device from `audio`
+  settings, the system default, and finally any enumerable input device. A
+  disconnected or busy headset no longer blocks dictation, and the error names
+  the microphones that were tried.
+
 ## 1.31.0-my.7
 
 ### Voice input UX

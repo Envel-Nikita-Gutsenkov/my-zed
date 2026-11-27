@@ -17,7 +17,7 @@ use std::{
 use anyhow::{Context as _, Result};
 use cpal::{
     DeviceId, SampleFormat, SupportedStreamConfig,
-    traits::{DeviceTrait as _, StreamTrait as _},
+    traits::{DeviceTrait as _, HostTrait as _, StreamTrait as _},
 };
 use settings::Settings as _;
 
@@ -73,26 +73,58 @@ pub struct Recorder {
 
 impl Recorder {
     /// Starts capturing from the configured microphone.
+    ///
+    /// The device chosen in `voice_input.device` wins, then the one selected for
+    /// audio calls, and if neither can be opened the remaining input devices are
+    /// tried in turn. A stale or busy device therefore degrades to any working
+    /// microphone instead of failing the whole dictation.
     pub fn start_from_settings(cx: &gpui::App) -> Result<Self> {
         let content = VoiceInputSettings::get_global(cx).content();
-        let device_id = content
+        let from_voice_settings = content
             .device()
-            .and_then(|device| DeviceId::from_str(device).ok())
-            .or_else(|| {
-                audio::AudioSettings::get_global(cx)
-                    .input_audio_device
-                    .clone()
-            });
-        Self::start(device_id, content.silence_threshold())
+            .and_then(|device| DeviceId::from_str(device).ok());
+        let from_audio_settings = audio::AudioSettings::get_global(cx)
+            .input_audio_device
+            .clone();
+
+        let preferred: Vec<DeviceId> = [from_voice_settings, from_audio_settings]
+            .into_iter()
+            .flatten()
+            .collect();
+        Self::start(&preferred, content.silence_threshold())
     }
 
     /// Opens the input stream and starts capturing mono samples.
     ///
     /// `silence_threshold` is the peak amplitude below which a frame counts as
     /// silence; it is only used to report [`Self::silence_duration`].
-    pub fn start(device_id: Option<DeviceId>, silence_threshold: f32) -> Result<Self> {
-        let device = audio::resolve_device(device_id.as_ref(), true)
-            .context("could not open the microphone")?;
+    pub fn start(preferred: &[DeviceId], silence_threshold: f32) -> Result<Self> {
+        let mut failures = Vec::new();
+        let mut attempted = 0usize;
+        for (name, device) in candidate_devices(preferred) {
+            attempted += 1;
+            match Self::start_on(&device, silence_threshold) {
+                Ok(recorder) => {
+                    log::info!("voice input: recording from microphone {name}");
+                    return Ok(recorder);
+                }
+                Err(error) => failures.push(format!("{name}: {error:#}")),
+            }
+        }
+
+        match failures.len() {
+            0 => anyhow::bail!(
+                "no audio input device is available; connect a microphone or check your system sound settings"
+            ),
+            1 => anyhow::bail!("could not open the microphone ({})", failures[0]),
+            _ => anyhow::bail!(
+                "none of the {attempted} microphones could be opened; first error: {}",
+                failures[0]
+            ),
+        }
+    }
+
+    fn start_on(device: &cpal::Device, silence_threshold: f32) -> Result<Self> {
         let config = device
             .default_input_config()
             .context("the microphone has no default input configuration")?;
@@ -191,6 +223,44 @@ impl Recorder {
     pub fn finish(self) -> Result<Vec<u8>> {
         let (samples, sample_rate) = self.finish_samples()?;
         Ok(crate::wav::to_transcription_wav(&samples, 1, sample_rate))
+    }
+}
+
+/// Input devices to try, in the order they should be attempted: the preferred
+/// ids first, then the system default, then every other input device the host
+/// enumerates. Duplicates are dropped by name so a device that is both the
+/// default and explicitly selected is only tried once.
+fn candidate_devices(preferred: &[DeviceId]) -> Vec<(String, cpal::Device)> {
+    let host = cpal::default_host();
+    let mut devices: Vec<(String, cpal::Device)> = Vec::new();
+
+    if let Some(device) = host.default_input_device() {
+        push_device(&mut devices, device);
+    }
+    for id in preferred {
+        if let Some(device) = host.device_by_id(id) {
+            push_device(&mut devices, device);
+        }
+    }
+    match host.input_devices() {
+        Ok(input_devices) => {
+            for device in input_devices {
+                push_device(&mut devices, device);
+            }
+        }
+        Err(error) => log::warn!("voice input: could not enumerate microphones: {error}"),
+    }
+
+    devices
+}
+
+fn push_device(devices: &mut Vec<(String, cpal::Device)>, device: cpal::Device) {
+    let name = device
+        .description()
+        .map(|description| description.name().to_string())
+        .unwrap_or_else(|_| "unknown microphone".to_string());
+    if !devices.iter().any(|(existing, _)| *existing == name) {
+        devices.push((name, device));
     }
 }
 
