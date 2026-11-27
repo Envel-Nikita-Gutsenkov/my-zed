@@ -32,7 +32,9 @@ pub use downloads::{
     start as start_model_download, status as model_download_status,
 };
 pub use local::{DownloadProgress, ensure_model, models_dir as local_models_dir, transcribe_local};
-pub use recorder::{AutoStopReason, Recorder, auto_stop_reason, is_too_short};
+pub use recorder::{
+    AutoStopReason, InputDeviceInfo, Recorder, auto_stop_reason, input_devices, is_too_short,
+};
 pub use settings::VoiceInputSettings;
 pub use settings_content::{
     DEFAULT_CHUNK_SECS, DEFAULT_CLOUD_RETRIES, DEFAULT_CLOUD_TIMEOUT_SECS, DEFAULT_CONTEXT_CHARS,

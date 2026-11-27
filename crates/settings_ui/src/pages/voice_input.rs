@@ -103,6 +103,8 @@ pub(crate) fn render_voice_input_page(
                 ),
         )
         .child(Divider::horizontal())
+        .child(microphone_section(&settings, cx))
+        .child(Divider::horizontal())
         .child(cloud_section(&settings, engine, cx))
         .child(Divider::horizontal())
         .child(local_section(&settings, &models_dir, engine, cx))
@@ -181,6 +183,125 @@ fn set_enabled(enabled: bool, window: &mut Window, cx: &mut App) {
     )
     .log_err();
     notify_settings(window, cx);
+}
+
+/// Microphone picker.
+///
+/// Dictation falls back to other devices when the configured one cannot be
+/// opened, but a user whose default is a dead PipeWire/ALSA node needs a way to
+/// pin a working device without editing JSON.
+fn microphone_section(
+    settings: &voice_input::VoiceInputSettingsContent,
+    cx: &mut App,
+) -> AnyElement {
+    let configured = settings.device().map(|device| device.to_string());
+    let devices = voice_input::input_devices();
+    let audio_device = audio::AudioSettings::get_global(cx)
+        .input_audio_device
+        .clone();
+
+    let mut rows = v_flex().gap_1().child(device_row(
+        "voice-input-device-default",
+        "System default",
+        configured.is_none(),
+        None,
+        cx,
+    ));
+
+    if devices.is_empty() {
+        rows = rows.child(
+            Label::new("No microphone was found. Connect one and reopen this page.")
+                .size(LabelSize::XSmall)
+                .color(Color::Muted),
+        );
+    }
+
+    for device in devices {
+        let label = if device.is_default {
+            format!("{} (default)", device.name)
+        } else {
+            device.name.clone()
+        };
+        let selected = match &configured {
+            Some(configured) => configured == &device.id,
+            None => false,
+        };
+        rows = rows.child(device_row(
+            device.id.clone(),
+            label,
+            selected,
+            Some(device.id.clone()),
+            cx,
+        ));
+    }
+
+    v_flex()
+        .gap_2()
+        .child(SettingsSectionHeader::new("Microphone"))
+        .child(
+            Label::new(match &audio_device {
+                Some(_) => {
+                    "The system default follows the input device chosen for audio calls when one \
+                     is set, and otherwise lets the operating system pick."
+                }
+                None => "The system default lets the operating system pick the input device.",
+            })
+            .size(LabelSize::Small)
+            .color(Color::Muted),
+        )
+        .child(rows)
+        .into_any_element()
+}
+
+fn device_row(
+    id: impl Into<SharedString>,
+    label: impl Into<SharedString>,
+    selected: bool,
+    device: Option<String>,
+    cx: &App,
+) -> AnyElement {
+    let id: SharedString = id.into();
+    h_flex()
+        .id(SharedString::from(format!("voice-input-device-{id}")))
+        .w_full()
+        .gap_2()
+        .px_3()
+        .py_1()
+        .rounded_md()
+        .border_1()
+        .border_color(cx.theme().colors().border_variant)
+        .justify_between()
+        .items_center()
+        .child(Label::new(label).size(LabelSize::Small))
+        .child(if selected {
+            Icon::new(IconName::Check)
+                .size(IconSize::Small)
+                .color(Color::Accent)
+                .into_any_element()
+        } else {
+            Button::new(
+                SharedString::from(format!("voice-input-device-use-{id}")),
+                "Use",
+            )
+            .style(ButtonStyle::Outlined)
+            .label_size(LabelSize::XSmall)
+            .on_click(move |_, window, cx| {
+                let device = device.clone();
+                update_settings_file(
+                    SettingsUiFile::User,
+                    Some("voice_input.device"),
+                    window,
+                    cx,
+                    move |content, _| {
+                        content.voice_input.get_or_insert_default().device = device;
+                    },
+                )
+                .log_err();
+                notify_settings(window, cx);
+            })
+            .into_any_element()
+        })
+        .into_any_element()
 }
 
 fn cloud_section(

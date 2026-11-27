@@ -124,11 +124,31 @@ impl Recorder {
         }
     }
 
+    /// Opens the device with its default configuration, then with the other
+    /// configurations it advertises. Some host backends report a default that
+    /// they then refuse to start (stale PipeWire/PulseAudio nodes, busy HDMI
+    /// inputs), so one rejected format should not fail the whole dictation.
     fn start_on(device: &cpal::Device, silence_threshold: f32) -> Result<Self> {
-        let config = device
-            .default_input_config()
-            .context("the microphone has no default input configuration")?;
+        let mut first_error = None;
+        for config in input_config_candidates(device) {
+            match Self::open_stream(device, &config, silence_threshold) {
+                Ok(recorder) => return Ok(recorder),
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
+            }
+        }
+        match first_error {
+            Some(error) => Err(error),
+            None => anyhow::bail!("the microphone advertises no usable input format"),
+        }
+    }
 
+    fn open_stream(
+        device: &cpal::Device,
+        config: &SupportedStreamConfig,
+        silence_threshold: f32,
+    ) -> Result<Self> {
         let samples = Arc::new(Mutex::new(Vec::new()));
         let last_loud = Arc::new(Mutex::new(Instant::now()));
         let channels = config.channels() as usize;
@@ -164,7 +184,7 @@ impl Recorder {
         stream.play().context("failed to start the microphone")?;
 
         Ok(Self {
-            config,
+            config: *config,
             samples,
             last_loud,
             threshold: silence_threshold,
@@ -224,6 +244,96 @@ impl Recorder {
         let (samples, sample_rate) = self.finish_samples()?;
         Ok(crate::wav::to_transcription_wav(&samples, 1, sample_rate))
     }
+}
+
+/// Stream formats to try on one device: the default first, then the
+/// standard-rate / highest-rate variants it advertises.
+fn input_config_candidates(device: &cpal::Device) -> Vec<SupportedStreamConfig> {
+    let mut configs = Vec::new();
+    if let Ok(default) = device.default_input_config() {
+        configs.push(default);
+    }
+
+    if let Ok(supported) = device.supported_input_configs() {
+        for range in supported.take(16) {
+            let candidates = [
+                range.try_with_standard_sample_rate(),
+                Some(range.with_max_sample_rate()),
+            ];
+            for candidate in candidates.into_iter().flatten() {
+                let already_known = configs.iter().any(|existing| {
+                    existing.sample_format() == candidate.sample_format()
+                        && existing.channels() == candidate.channels()
+                        && existing.sample_rate() == candidate.sample_rate()
+                });
+                if !already_known {
+                    configs.push(candidate);
+                }
+            }
+        }
+    }
+
+    // Opening a stream can block for the timeout each time a format is
+    // rejected, so keep the list short; dictation has no use for exotic formats.
+    configs.truncate(6);
+    configs
+}
+
+/// An audio input device the host reports, for the settings UI.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InputDeviceInfo {
+    /// Stable id to store in `voice_input.device` / `audio.input_audio_device`.
+    pub id: String,
+    pub name: String,
+    pub is_default: bool,
+}
+
+/// Every input device the host reports, with the system default first.
+///
+/// The settings page lists these so a user whose microphone fails to open can
+/// pick another one instead of editing JSON.
+pub fn input_devices() -> Vec<InputDeviceInfo> {
+    let host = cpal::default_host();
+    let default_id = host
+        .default_input_device()
+        .and_then(|device| device.id().ok())
+        .map(|id| id.to_string());
+
+    let mut devices: Vec<InputDeviceInfo> = Vec::new();
+    match host.input_devices() {
+        Ok(input_devices) => {
+            for device in input_devices {
+                let id = match device.id() {
+                    Ok(id) => id.to_string(),
+                    Err(error) => {
+                        log::warn!("voice input: could not identify a microphone: {error}");
+                        continue;
+                    }
+                };
+                if devices.iter().any(|existing| existing.id == id) {
+                    continue;
+                }
+                let name = device
+                    .description()
+                    .map(|description| description.name().to_string())
+                    .unwrap_or_else(|_| "unknown microphone".to_string());
+                devices.push(InputDeviceInfo {
+                    is_default: default_id.as_deref() == Some(id.as_str()),
+                    id,
+                    name,
+                });
+            }
+        }
+        Err(error) => log::warn!("voice input: could not enumerate microphones: {error}"),
+    }
+
+    devices.sort_by(|left, right| {
+        right
+            .is_default
+            .cmp(&left.is_default)
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    devices
 }
 
 /// Input devices to try, in the order they should be attempted: the preferred
