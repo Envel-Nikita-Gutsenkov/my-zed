@@ -3193,8 +3193,13 @@ impl Thread {
     /// A turn can issue many requests (one per tool-call step); each needs its
     /// own row so the stats sum them instead of keeping only the largest.
     fn usage_stats_request_id(&self) -> String {
-        format!("{}:{}:{}", self.id(), self.prompt_id, self.request_seq)
+        self.usage_stats_request_id_for_seq(self.request_seq)
     }
+
+    fn usage_stats_request_id_for_seq(&self, request_seq: u64) -> String {
+        format!("{}:{}:{}", self.id(), self.prompt_id, request_seq)
+    }
+
 
     /// Appends the accounted usage of the current request to the usage stats
     /// database, keyed by the user message and request sequence. This is an
@@ -3223,6 +3228,62 @@ impl Thread {
             cache_write_tokens: usage.cache_creation_input_tokens,
             saved_tokens: self.last_request_saved_tokens.get(),
             model: Some(model.id().0.to_string()),
+            provider: Some(model.provider_name().0.to_string()),
+            thread_id: Some(self.id.to_string()),
+        };
+        crate::db::record_token_usage(cx, event).detach_and_log_err(cx);
+    }
+
+    /// Records usage of a request that is not part of the visible turn, such as
+    /// compaction or thread summarization. These requests are billed by the
+    /// provider, so they get their own stats row to keep totals exact while
+    /// staying out of the turn's per-request accounting.
+    fn record_auxiliary_request_usage(
+        &mut self,
+        model: &LanguageModel,
+        usage: language_model::TokenUsage,
+        cx: &mut Context<Self>,
+    ) {
+        if usage.input_tokens == 0
+            && usage.output_tokens == 0
+            && usage.cache_read_input_tokens == 0
+            && usage.cache_creation_input_tokens == 0
+        {
+            return;
+        }
+
+        self.request_seq = self.request_seq.wrapping_add(1);
+        self.record_auxiliary_request_usage_with_id(self.usage_stats_request_id(), model, usage, cx);
+    }
+
+    /// Same as [`Self::record_auxiliary_request_usage`], but for requests whose
+    /// usage arrives in several streaming chunks under one request id.
+    fn record_auxiliary_request_usage_with_id(
+        &self,
+        request_id: String,
+        model: &LanguageModel,
+        usage: language_model::TokenUsage,
+        cx: &mut Context<Self>,
+    ) {
+        if usage.input_tokens == 0
+            && usage.output_tokens == 0
+            && usage.cache_read_input_tokens == 0
+            && usage.cache_creation_input_tokens == 0
+        {
+            return;
+        }
+
+        let event = crate::db::TokenUsageEvent {
+            request_id,
+            created_at: chrono::Utc::now().timestamp(),
+            input_tokens: usage.input_tokens,
+            output_tokens: usage.output_tokens,
+            cache_read_tokens: usage.cache_read_input_tokens,
+            cache_write_tokens: usage.cache_creation_input_tokens,
+            saved_tokens: 0,
+            model: Some(model.id().0.to_string()),
+            provider: Some(model.provider_name().0.to_string()),
+            thread_id: Some(self.id.to_string()),
         };
         crate::db::record_token_usage(cx, event).detach_and_log_err(cx);
     }
@@ -3311,6 +3372,22 @@ impl Thread {
             model.max_total_tokens(),
             model.max_output_tokens(),
         ))
+    }
+
+    /// The input-token budget the user actually runs against: the auto-compaction
+    /// threshold when auto-compaction is enabled, otherwise the model's input
+    /// capacity. This is what the context indicator should use as its
+    /// denominator, rather than the model's raw context window.
+    pub fn context_budget(&self, cx: &App) -> Option<u64> {
+        let capacity = self.input_token_capacity()?;
+        if !self.auto_compaction_enabled(cx) {
+            return Some(capacity);
+        }
+        let threshold = auto_compact_threshold_token_count(
+            AgentSettings::get_global(cx).auto_compact.threshold,
+            capacity,
+        );
+        Some(threshold.min(capacity))
     }
 
     pub fn latest_token_usage(&self) -> Option<acp_thread::TokenUsage> {
@@ -4222,6 +4299,9 @@ impl Thread {
 
         log::debug!("Running compaction");
         let compaction_id = acp_thread::ContextCompactionId(Uuid::new_v4().to_string().into());
+        // One stats row per compaction: the provider reports usage on many chunks,
+        // and the event id deduplicates them into a single `MAX`-merged row.
+        let compaction_request_id = format!("{}:compaction", Uuid::new_v4());
         event_stream.send_context_compaction(
             compaction_id.clone(),
             acp_thread::ContextCompactionStatus::InProgress,
@@ -4267,8 +4347,19 @@ impl Thread {
                         event_stream.send_context_compaction_update(compaction_id.clone(), &text);
                     }
                     LanguageModelCompletionEvent::UsageUpdate(usage) => {
-                        this.update(cx, |this, _cx| {
+                        let compaction_request_id = compaction_request_id.clone();
+                        this.update(cx, |this, cx| {
                             this.accumulate_token_usage(usage);
+                            // Compaction forks its own provider request, but the
+                            // stream never goes through `begin_request_token_usage`,
+                            // so without this it would consume tokens invisibly.
+                            this.record_auxiliary_request_usage_with_id(
+                                compaction_request_id,
+                                &model,
+                                usage,
+                                cx,
+                            );
+                            cx.notify();
                         })?;
                     }
                     LanguageModelCompletionEvent::Stop(_)
@@ -4966,9 +5057,11 @@ impl Thread {
             reasoning_details: None,
         });
 
+        let usage_model = model.clone();
         let task = cx
             .spawn(async move |this, cx| {
                 let mut summary = String::new();
+                let mut usage = None;
                 let provider = cx
                     .update(|cx| LanguageModelRegistry::read_global(cx).provider_for_model(&model))
                     .log_err()?;
@@ -4979,6 +5072,10 @@ impl Thread {
                 while let Some(event) = messages.next().await {
                     let event = event.log_err()?;
                     let text = match event {
+                        LanguageModelCompletionEvent::UsageUpdate(reported) => {
+                            usage = Some(reported);
+                            continue;
+                        }
                         LanguageModelCompletionEvent::Text(text) => text,
                         _ => continue,
                     };
@@ -4991,6 +5088,9 @@ impl Thread {
                 let summary = SharedString::from(summary);
 
                 this.update(cx, |this, cx| {
+                    if let Some(usage) = usage {
+                        this.record_auxiliary_request_usage(&usage_model, usage, cx);
+                    }
                     this.summary = Some(summary.clone());
                     this.pending_summary_generation = None;
                     cx.notify()
@@ -5053,11 +5153,18 @@ impl Thread {
             &request_history_settings(cx),
         );
 
-        let title_generation = cx.spawn(async move |_this, cx| {
-            stream_thread_title(model, request, cx)
+        let usage_model = model.clone();
+        let title_generation = cx.spawn(async move |this, cx| {
+            let (title, usage) = stream_thread_title_with_usage(model, request, cx)
                 .await
-                .context("failed to generate thread title")
-                .map(SharedString::from)
+                .context("failed to generate thread title")?;
+            if let Some(usage) = usage {
+                this.update(cx, |this, cx| {
+                    this.record_auxiliary_request_usage(&usage_model, usage, cx);
+                })
+                .log_err();
+            }
+            Ok::<SharedString, anyhow::Error>(SharedString::from(title))
         });
 
         self.pending_title_generation = Some(cx.spawn(async move |this, cx| {
@@ -6171,21 +6278,35 @@ pub async fn stream_thread_title(
     request: LanguageModelRequest,
     cx: &AsyncApp,
 ) -> Result<String> {
+    Ok(stream_thread_title_with_usage(model, request, cx).await?.0)
+}
+
+/// Same as [`stream_thread_title`], but also returns the token usage the provider
+/// reported for the title request so that it can be accounted for.
+pub async fn stream_thread_title_with_usage(
+    model: LanguageModel,
+    request: LanguageModelRequest,
+    cx: &AsyncApp,
+) -> Result<(String, Option<TokenUsage>)> {
     let mut title = String::new();
+    let mut usage = None;
     let provider =
         cx.update(|cx| LanguageModelRegistry::read_global(cx).provider_for_model(&model))?;
     let mut events = provider.stream_completion(&model, request, cx).await?;
     while let Some(event) = events.next().await {
-        let LanguageModelCompletionEvent::Text(text) = event? else {
-            continue;
-        };
-        if let Some(newline_ix) = text.find(|ch| ch == '\n' || ch == '\r') {
-            title.push_str(&text[..newline_ix]);
-            break;
+        match event? {
+            LanguageModelCompletionEvent::Text(text) => {
+                if let Some(newline_ix) = text.find(|ch| ch == '\n' || ch == '\r') {
+                    title.push_str(&text[..newline_ix]);
+                    break;
+                }
+                title.push_str(&text);
+            }
+            LanguageModelCompletionEvent::UsageUpdate(usage_update) => usage = Some(usage_update),
+            _ => {}
         }
-        title.push_str(&text);
     }
-    Ok(title)
+    Ok((title, usage))
 }
 
 pub struct TokenUsageUpdated(pub Option<acp_thread::TokenUsage>);
@@ -10353,6 +10474,13 @@ mod tests {
                 assert_ne!(first, second);
                 assert_ne!(second, third);
                 assert_ne!(first, third);
+
+                // The key format is `{thread}:{prompt}:{request}`. The old
+                // one-colon format collapsed a multi-request turn into a single
+                // `MAX`-merged row and silently undercounted usage.
+                for id in [&first, &second, &third] {
+                    assert_eq!(id.matches(':').count(), 2, "unexpected key format: {id}");
+                }
             });
         });
     }

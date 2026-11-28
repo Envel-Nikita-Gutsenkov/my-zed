@@ -757,53 +757,68 @@ pub(crate) struct RootThreadUpdated;
 
 impl EventEmitter<RootThreadUpdated> for ConversationView {}
 
-fn nudge_auto_continue(
-    thread: Entity<AcpThread>,
-    session_id: &acp_v2::SessionId,
-    cx: &mut Context<ConversationView>,
-) {
-    let enabled = ThreadMetadataStore::try_global(cx).is_some_and(|store| {
-        store
+impl ConversationView {
+    fn nudge_auto_continue(
+        &mut self,
+        thread: Entity<AcpThread>,
+        session_id: &acp_v2::SessionId,
+        cx: &mut Context<Self>,
+    ) {
+        let enabled = ThreadMetadataStore::try_global(cx).is_some_and(|store| {
+            store
+                .read(cx)
+                .entry_by_session(session_id)
+                .is_some_and(|metadata| metadata.auto_continue)
+        });
+        if !enabled {
+            return;
+        }
+
+        let is_done = thread
             .read(cx)
-            .entry_by_session(session_id)
-            .is_some_and(|metadata| metadata.auto_continue)
-    });
-    if !enabled {
-        return;
-    }
+            .entries()
+            .iter()
+            .rev()
+            .find_map(|entry| match entry {
+                AgentThreadEntry::AssistantMessage(message) => Some(message.to_markdown(cx)),
+                _ => None,
+            })
+            .is_some_and(|text| {
+                text.contains("ALL DONE") || text.contains(agent::AUTO_CONTINUE_BLOCKED_MARKER)
+            });
+        if is_done {
+            return;
+        }
 
-    let is_done = thread
-        .read(cx)
-        .entries()
-        .iter()
-        .rev()
-        .find_map(|entry| match entry {
-            AgentThreadEntry::AssistantMessage(message) => Some(message.to_markdown(cx)),
-            _ => None,
+        // Multiple events (EndTurn, sandbox notice, tool failure) can each request a
+        // nudge. Claim a single pending slot so at most one auto-continue turn can
+        // ever be in flight, regardless of how many triggers race.
+        if self.auto_continue_pending {
+            return;
+        }
+        self.auto_continue_pending = true;
+
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(750))
+                .await;
+            this.update(cx, |this, cx| {
+                this.auto_continue_pending = false;
+                thread.update(cx, |thread, cx| {
+                    if thread.status() != ThreadStatus::Generating {
+                        thread.send(
+                            vec![acp_v2::ContentBlock::Text(acp_v2::TextContent::new(
+                                agent::AUTO_CONTINUE_NUDGE,
+                            ))],
+                            cx,
+                        );
+                    }
+                });
+            })
+            .log_err();
         })
-        .is_some_and(|text| {
-            text.contains("ALL DONE") || text.contains(agent::AUTO_CONTINUE_BLOCKED_MARKER)
-        });
-    if is_done {
-        return;
+        .detach();
     }
-
-    cx.spawn(async move |_this, cx| {
-        cx.background_executor()
-            .timer(Duration::from_millis(750))
-            .await;
-        thread.update(cx, |thread, cx| {
-            if thread.status() != ThreadStatus::Generating {
-                thread.send(
-                    vec![acp_v2::ContentBlock::Text(acp_v2::TextContent::new(
-                        agent::AUTO_CONTINUE_NUDGE,
-                    ))],
-                    cx,
-                );
-            }
-        });
-    })
-    .detach();
 }
 
 fn permission_option_for_action(
@@ -941,6 +956,12 @@ pub struct ConversationView {
     /// Shared with the child [`ThreadView`] when one is constructed.
     pub(crate) code_span_resolver: AgentCodeSpanResolver,
     request_elicitation_form_states: HashMap<ElicitationEntryId, ElicitationFormState>,
+    /// Single-slot guard that makes duplicate auto-continue requests
+    /// structurally impossible: while a nudge timer is armed for the current
+    /// idle window, no second nudge can be armed. The flag is cleared by the
+    /// timer itself, never by event handlers, so a dropped event cannot leak
+    /// the arm.
+    auto_continue_pending: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -1282,6 +1303,7 @@ impl ConversationView {
             draft_prompt_persist_task: None,
             code_span_resolver,
             request_elicitation_form_states: HashMap::default(),
+            auto_continue_pending: false,
             _subscriptions: subscriptions,
             focus_handle: cx.focus_handle(),
         }
@@ -2201,7 +2223,7 @@ impl ConversationView {
                 if !is_subagent {
                     let sent_queued_message = self.send_queued_after_confirmed_idle(window, cx);
                     if !sent_queued_message {
-                        nudge_auto_continue(thread.clone(), &session_id, cx);
+                        self.nudge_auto_continue(thread.clone(), &session_id, cx);
                     }
                 }
             }
@@ -2452,7 +2474,7 @@ impl ConversationView {
                 // nudge on a normal end-of-turn so errors/cancellations are
                 // left alone, and we never nudge a subagent (handled above).
                 if !sent_queued_message && *stop_reason == Some(acp_v2::StopReason::EndTurn) {
-                    nudge_auto_continue(thread.clone(), &session_id, cx);
+                    self.nudge_auto_continue(thread.clone(), &session_id, cx);
                 }
             }
             AcpThreadEvent::Refusal => {

@@ -30,7 +30,7 @@ pub mod test_support;
 mod thread_import;
 pub mod thread_metadata_store;
 pub mod thread_worktree_archive;
-mod token_usage_window;
+mod token_usage_page;
 
 pub mod threads_archive_view;
 mod ui;

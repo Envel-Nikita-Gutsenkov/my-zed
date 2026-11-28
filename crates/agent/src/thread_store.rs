@@ -219,7 +219,7 @@ impl ThreadStore {
         }
 
         if settings.max_threads > 0 && threads.len() > settings.max_threads {
-            threads.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+            threads.sort_by_key(|thread| std::cmp::Reverse(thread.updated_at));
             let excess = threads.split_off(settings.max_threads);
             for thread in excess {
                 match database.delete_thread(thread.id.clone()).await {

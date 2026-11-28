@@ -402,11 +402,16 @@ pub struct TokenUsageEvent {
     pub cache_write_tokens: u64,
     pub saved_tokens: u64,
     pub model: Option<String>,
+    /// Thread the request belongs to, used for per-chat and per-project views.
+    pub thread_id: Option<String>,
+    /// Provider (e.g. `opencode`, `command-code`) that served the request.
+    pub provider: Option<String>,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct TokenUsageBucket {
     pub start: i64,
+    pub requests: u64,
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cache_read_tokens: u64,
@@ -414,7 +419,32 @@ pub struct TokenUsageBucket {
     pub saved_tokens: u64,
 }
 
-type TokenUsageEventParams = (String, i64, i64, i64, i64, i64, i64, Option<String>);
+impl TokenUsageBucket {
+    /// Prompt-side tokens: everything sent to the provider, cached or not.
+    pub fn total(&self) -> u64 {
+        self.input_tokens
+            .saturating_add(self.cache_read_tokens)
+            .saturating_add(self.cache_write_tokens)
+    }
+
+    /// Prompt plus completion tokens, i.e. everything billed for this bucket.
+    pub fn total_tokens(&self) -> u64 {
+        self.total().saturating_add(self.output_tokens)
+    }
+}
+
+type TokenUsageEventParams = (
+    String,
+    i64,
+    i64,
+    i64,
+    i64,
+    i64,
+    i64,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
 
 pub(crate) struct ThreadsDatabase {
     executor: BackgroundExecutor,
@@ -538,7 +568,9 @@ impl ThreadsDatabase {
                     cache_read_tokens INTEGER NOT NULL,
                     cache_write_tokens INTEGER NOT NULL,
                     saved_tokens INTEGER NOT NULL,
-                    model TEXT
+                    model TEXT,
+                    thread_id TEXT,
+                    provider TEXT
                 )
             "})
             .and_then(|mut create_table| create_table())
@@ -552,6 +584,20 @@ impl ThreadsDatabase {
             .and_then(|mut create_index| create_index())
             .map_err(|e| e.context("Failed to create token_usage_events index"))
             .log_err();
+
+        // Older databases predate the per-thread and per-provider breakdown, so
+        // add the columns in place. SQLite has no `ADD COLUMN IF NOT EXISTS`, and
+        // the error for a duplicate column is expected.
+        for column in ["thread_id", "provider"] {
+            let statement = format!(
+                "ALTER TABLE token_usage_events ADD COLUMN {} TEXT",
+                column
+            );
+            connection
+                .exec(&statement)
+                .and_then(|mut alter| alter())
+                .ok();
+        }
 
         const TOKEN_USAGE_RETENTION_SECONDS: i64 = 90 * 24 * 60 * 60;
         let cutoff = std::time::SystemTime::now()
@@ -863,9 +909,10 @@ impl ThreadsDatabase {
             let mut upsert = connection.exec_bound::<TokenUsageEventParams>(indoc! {"
                     INSERT INTO token_usage_events (
                         request_id, created_at, input_tokens, output_tokens,
-                        cache_read_tokens, cache_write_tokens, saved_tokens, model
+                        cache_read_tokens, cache_write_tokens, saved_tokens, model,
+                        thread_id, provider
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(request_id) DO UPDATE SET
                         input_tokens = MAX(input_tokens, excluded.input_tokens),
                         output_tokens = MAX(output_tokens, excluded.output_tokens),
@@ -884,6 +931,8 @@ impl ThreadsDatabase {
                 event.cache_write_tokens as i64,
                 event.saved_tokens as i64,
                 event.model,
+                event.thread_id,
+                event.provider,
             ))?;
 
             Ok(())
@@ -902,9 +951,10 @@ impl ThreadsDatabase {
             let connection = connection.lock();
 
             let mut select = connection
-                .select_bound::<(i64, i64), (i64, i64, i64, i64, i64, i64)>(indoc! {"
+                .select_bound::<(i64, i64), (i64, i64, i64, i64, i64, i64, i64)>(indoc! {"
                 SELECT
                     (created_at / ?1) * ?1 AS bucket_start,
+                    COUNT(*),
                     SUM(input_tokens),
                     SUM(output_tokens),
                     SUM(cache_read_tokens),
@@ -923,6 +973,7 @@ impl ThreadsDatabase {
                 .map(
                     |(
                         start,
+                        requests,
                         input_tokens,
                         output_tokens,
                         cache_read_tokens,
@@ -930,6 +981,7 @@ impl ThreadsDatabase {
                         saved_tokens,
                     )| TokenUsageBucket {
                         start,
+                        requests: requests.max(0) as u64,
                         input_tokens: input_tokens.max(0) as u64,
                         output_tokens: output_tokens.max(0) as u64,
                         cache_read_tokens: cache_read_tokens.max(0) as u64,
@@ -938,6 +990,86 @@ impl ThreadsDatabase {
                     },
                 )
                 .collect())
+        })
+    }
+
+    /// Aggregates recorded usage by one dimension (model, provider or thread).
+    ///
+    /// Project-level totals are computed by the caller from the per-thread
+    /// breakdown joined with the thread list metadata, so that a thread opened
+    /// from several folders is attributed to each of them.
+    pub fn token_usage_breakdown(
+        &self,
+        since: i64,
+        group_by: TokenUsageGroupBy,
+    ) -> Task<Result<Vec<TokenUsageBreakdownRow>>> {
+        let connection = self.connection.clone();
+        let column = group_by.column();
+
+        self.executor.spawn(async move {
+            let connection = connection.lock();
+
+            let query = format!(
+                "SELECT
+                    {column} AS key,
+                    COUNT(*),
+                    SUM(input_tokens),
+                    SUM(output_tokens),
+                    SUM(cache_read_tokens),
+                    SUM(cache_write_tokens),
+                    SUM(saved_tokens)
+                FROM token_usage_events
+                WHERE created_at >= ?1
+                GROUP BY key
+                ORDER BY SUM(input_tokens + cache_read_tokens + cache_write_tokens) DESC"
+            );
+
+            let mut select = connection.select_bound::<i64, (
+                Option<String>,
+                i64,
+                i64,
+                i64,
+                i64,
+                i64,
+                i64,
+            )>(&query)?;
+
+            let rows = select(since)?;
+
+            Ok(rows
+                .into_iter()
+                .map(
+                    |(
+                        key,
+                        requests,
+                        input_tokens,
+                        output_tokens,
+                        cache_read_tokens,
+                        cache_write_tokens,
+                        saved_tokens,
+                    )| TokenUsageBreakdownRow {
+                        key,
+                        requests: requests.max(0) as u64,
+                        input_tokens: input_tokens.max(0) as u64,
+                        output_tokens: output_tokens.max(0) as u64,
+                        cache_read_tokens: cache_read_tokens.max(0) as u64,
+                        cache_write_tokens: cache_write_tokens.max(0) as u64,
+                        saved_tokens: saved_tokens.max(0) as u64,
+                    },
+                )
+                .collect())
+        })
+    }
+
+    /// Deletes every recorded usage event, resetting all statistics.
+    pub fn clear_token_usage_events(&self) -> Task<Result<()>> {
+        let connection = self.connection.clone();
+
+        self.executor.spawn(async move {
+            let connection = connection.lock();
+            let mut delete = connection.exec_bound::<()>("DELETE FROM token_usage_events")?;
+            delete(())?;
+            Ok(())
         })
     }
 
@@ -983,6 +1115,78 @@ pub fn record_token_usage(cx: &mut App, event: TokenUsageEvent) -> Task<Result<(
     cx.background_spawn(async move {
         let database = database.await.map_err(|error| anyhow::anyhow!("{error}"))?;
         database.record_token_usage_event(event).await
+    })
+}
+
+/// Grouping dimensions available for the statistics breakdowns.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum TokenUsageGroupBy {
+    Model,
+    Provider,
+    Thread,
+}
+
+impl TokenUsageGroupBy {
+    fn column(self) -> &'static str {
+        match self {
+            TokenUsageGroupBy::Model => "model",
+            TokenUsageGroupBy::Provider => "provider",
+            TokenUsageGroupBy::Thread => "thread_id",
+        }
+    }
+}
+
+/// One aggregated row of a statistics breakdown.
+#[derive(Clone, Debug)]
+pub struct TokenUsageBreakdownRow {
+    /// Grouping key; `None` groups rows recorded before the column existed.
+    pub key: Option<String>,
+    pub requests: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_write_tokens: u64,
+    pub saved_tokens: u64,
+}
+
+impl TokenUsageBreakdownRow {
+    pub fn prompt_tokens(&self) -> u64 {
+        self.input_tokens + self.cache_read_tokens + self.cache_write_tokens
+    }
+
+    pub fn total_tokens(&self) -> u64 {
+        self.prompt_tokens() + self.output_tokens
+    }
+}
+
+/// Returns usage aggregated by one dimension since `since` (unix seconds).
+pub fn token_usage_breakdown(
+    cx: &mut App,
+    since: i64,
+    group_by: TokenUsageGroupBy,
+) -> Task<Result<Vec<TokenUsageBreakdownRow>>> {
+    let database = ThreadsDatabase::connect(cx);
+    cx.background_spawn(async move {
+        let database = database.await.map_err(|error| anyhow::anyhow!("{error}"))?;
+        database.token_usage_breakdown(since, group_by).await
+    })
+}
+
+/// Lists thread metadata (id and title) so usage can be attributed to chats.
+pub fn list_thread_titles(cx: &mut App) -> Task<Result<Vec<DbThreadMetadata>>> {
+    let database = ThreadsDatabase::connect(cx);
+    cx.background_spawn(async move {
+        let database = database.await.map_err(|error| anyhow::anyhow!("{error}"))?;
+        database.list_threads().await
+    })
+}
+
+/// Deletes every recorded token usage event.
+pub fn clear_token_usage(cx: &mut App) -> Task<Result<()>> {
+    let database = ThreadsDatabase::connect(cx);
+    cx.background_spawn(async move {
+        let database = database.await.map_err(|error| anyhow::anyhow!("{error}"))?;
+        database.clear_token_usage_events().await
     })
 }
 
@@ -1703,5 +1907,98 @@ mod tests {
             .expect("scroll_position should be restored");
         assert_eq!(scroll.item_ix, 42);
         assert!((scroll.offset_in_item - 13.5).abs() < f32::EPSILON);
+    }
+
+    fn usage_event(request_id: &str) -> TokenUsageEvent {
+        TokenUsageEvent {
+            request_id: request_id.into(),
+            created_at: 1_000,
+            input_tokens: 10,
+            output_tokens: 5,
+            cache_read_tokens: 100,
+            cache_write_tokens: 1,
+            saved_tokens: 0,
+            model: Some("model-a".into()),
+            thread_id: Some("thread-1".into()),
+            provider: Some("provider-a".into()),
+        }
+    }
+
+    #[gpui::test]
+    async fn test_token_usage_events_are_idempotent_per_request(cx: &mut TestAppContext) {
+        let database = ThreadsDatabase::new(cx.executor()).unwrap();
+
+        // A streamed request reports usage on many chunks; the same request id
+        // must collapse into a single row instead of inflating the totals.
+        database
+            .record_token_usage_event(usage_event("t1:p1:1"))
+            .await
+            .unwrap();
+        let mut growing = usage_event("t1:p1:1");
+        growing.input_tokens = 12;
+        growing.output_tokens = 7;
+        database
+            .record_token_usage_event(growing)
+            .await
+            .unwrap();
+
+        let rows = database
+            .token_usage_breakdown(0, TokenUsageGroupBy::Thread)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1, "one request id must yield one row");
+        assert_eq!(rows[0].requests, 1);
+        assert_eq!(rows[0].input_tokens, 12, "retries keep the largest value");
+        assert_eq!(rows[0].output_tokens, 7);
+    }
+
+    #[gpui::test]
+    async fn test_token_usage_breakdown_groups_by_model_and_provider(cx: &mut TestAppContext) {
+        let database = ThreadsDatabase::new(cx.executor()).unwrap();
+
+        let mut second = usage_event("t1:p1:2");
+        second.model = Some("model-b".into());
+        second.provider = Some("provider-b".into());
+        second.thread_id = Some("thread-2".into());
+
+        database
+            .record_token_usage_event(usage_event("t1:p1:1"))
+            .await
+            .unwrap();
+        database
+            .record_token_usage_event(second)
+            .await
+            .unwrap();
+
+        let by_model = database
+            .token_usage_breakdown(0, TokenUsageGroupBy::Model)
+            .await
+            .unwrap();
+        assert_eq!(by_model.len(), 2);
+        assert!(by_model.iter().all(|row| row.requests == 1));
+
+        let by_provider = database
+            .token_usage_breakdown(0, TokenUsageGroupBy::Provider)
+            .await
+            .unwrap();
+        let provider_a = by_provider
+            .iter()
+            .find(|row| row.key.as_deref() == Some("provider-a"))
+            .expect("provider-a row");
+        assert_eq!(provider_a.requests, 1);
+        assert_eq!(provider_a.cache_read_tokens, 100);
+
+        let by_thread = database
+            .token_usage_breakdown(0, TokenUsageGroupBy::Thread)
+            .await
+            .unwrap();
+        assert_eq!(by_thread.len(), 2);
+
+        database.clear_token_usage_events().await.unwrap();
+        let after_clear = database
+            .token_usage_breakdown(0, TokenUsageGroupBy::Thread)
+            .await
+            .unwrap();
+        assert!(after_clear.is_empty(), "clearing must drop all rows");
     }
 }

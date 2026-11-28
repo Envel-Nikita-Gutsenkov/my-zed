@@ -6171,20 +6171,31 @@ impl ThreadView {
         });
 
         let progress_color = |ratio: f32| -> Hsla {
-            if ratio >= 0.85 {
+            if ratio >= 1.0 {
+                cx.theme().status().error
+            } else if ratio >= 0.85 {
                 cx.theme().status().warning
             } else {
                 cx.theme().colors().text_muted
             }
         };
 
+        // The denominator is the budget the agent actually enforces: when
+        // auto-compaction is enabled this is the compaction threshold, which is
+        // often far below the model's raw context window. Otherwise it is the
+        // capacity left after reserving the model's output allowance.
+        let context_limit = self
+            .as_native_thread(cx)
+            .and_then(|thread| thread.read(cx).context_budget(cx))
+            .unwrap_or(usage.max_tokens);
+
         let used = crate::humanize_token_count(usage.used_tokens);
-        let max = crate::humanize_token_count(usage.max_tokens);
+        let max = crate::humanize_token_count(context_limit);
         let input_tokens_label = crate::humanize_token_count(usage.input_tokens);
         let output_tokens_label = crate::humanize_token_count(usage.output_tokens);
 
-        let progress_ratio = if usage.max_tokens > 0 {
-            usage.used_tokens as f32 / usage.max_tokens as f32
+        let progress_ratio = if context_limit > 0 {
+            usage.used_tokens as f32 / context_limit as f32
         } else {
             0.0
         };
@@ -6222,7 +6233,10 @@ impl ThreadView {
             .map(|thread| {
                 let thread = thread.read(cx);
                 (
-                    thread.input_token_capacity().unwrap_or(usage.max_tokens),
+                    thread
+                        .context_budget(cx)
+                        .unwrap_or(usage.max_tokens)
+                        .min(thread.input_token_capacity().unwrap_or(u64::MAX)),
                     thread
                         .model()
                         .and_then(|model| model.max_output_tokens())
@@ -6236,7 +6250,7 @@ impl ThreadView {
         // The input capacity often sits below the model's raw context window
         // because output tokens are reserved from the same window. Flag that so
         // the tooltip can make clear the shown limit is not the model's maximum.
-        let input_limit_below_model = max_input_tokens < usage.max_tokens;
+        let input_limit_below_model = context_limit < usage.max_tokens;
         let model_window_label = crate::humanize_token_count(usage.max_tokens);
 
         let build_tooltip = {
@@ -6262,6 +6276,7 @@ impl ThreadView {
                     output_max: output_max_label,
                     input_limit_below_model,
                     model_window: model_window_label,
+                    over_budget: progress_ratio >= 1.0,
                     show_split,
                     cost_label,
                     separator_color: tooltip_separator_color,
@@ -6345,7 +6360,7 @@ impl ThreadView {
                     .child(
                         CircularProgress::new(
                             usage.used_tokens as f32,
-                            usage.max_tokens as f32,
+                            context_limit as f32,
                             ring_size,
                             cx,
                         )
@@ -7445,6 +7460,9 @@ struct TokenUsageTooltip {
     /// it, so it's clear this is an effective limit and not the model's maximum.
     input_limit_below_model: bool,
     model_window: String,
+    /// True once the context has reached the auto-compact budget, at which point
+    /// the shown limit is the budget rather than the model's raw window.
+    over_budget: bool,
     show_split: bool,
     cost_label: Option<String>,
     separator_color: Color,
@@ -7465,6 +7483,7 @@ impl Render for TokenUsageTooltip {
         let input_max = self.input_max.clone();
         let output_max = self.output_max.clone();
         let input_limit_below_model = self.input_limit_below_model;
+        let over_budget = self.over_budget;
         let model_window = self.model_window.clone();
         let show_split = self.show_split;
         let cost_label = self.cost_label.clone();
@@ -7485,12 +7504,25 @@ impl Render for TokenUsageTooltip {
                     this.child(
                         h_flex()
                             .gap_0p5()
-                            .child(Label::new(percentage.clone()))
+                            .child(Label::new(percentage.clone()).when(over_budget, |this| {
+                                this.color(Color::Custom(cx.theme().status().error))
+                            }))
                             .child(Label::new("\u{2022}").color(separator_color).mx_1())
                             .child(Label::new(used.clone()))
                             .child(Label::new("/").color(separator_color))
-                            .child(Label::new(max.clone()).color(Color::Muted)),
+                            .child(Label::new(max.clone()).color(if over_budget {
+                                Color::Custom(cx.theme().status().error)
+                            } else {
+                                Color::Muted
+                            })),
                     )
+                    .when(over_budget, |this| {
+                        this.child(
+                            Label::new("Over the auto-compact budget")
+                                .color(Color::Custom(cx.theme().status().error))
+                                .size(LabelSize::Small),
+                        )
+                    })
                 })
                 .when(show_split, |this| {
                     this.child(

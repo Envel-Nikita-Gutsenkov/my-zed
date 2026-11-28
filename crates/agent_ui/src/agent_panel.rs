@@ -637,8 +637,8 @@ pub fn init(cx: &mut App) {
                         });
                     }
                 })
-                .register_action(|_workspace, _: &OpenTokenUsageStats, window, cx| {
-                    crate::token_usage_window::show_token_usage(window, cx);
+                .register_action(|workspace, _: &OpenTokenUsageStats, window, cx| {
+                    crate::token_usage_page::open(workspace, window, cx);
                 })
                 .register_action(|workspace, action: &ReviewBranchDiff, window, cx| {
                     let Some(panel) = workspace.panel::<AgentPanel>(cx) else {
@@ -6273,8 +6273,15 @@ impl AgentPanel {
         let token_usage_button = IconButton::new("token-usage-stats", IconName::GitGraph)
             .icon_size(IconSize::Small)
             .tooltip(Tooltip::text("Token Usage Statistics"))
-            .on_click(cx.listener(|_, _, window, cx| {
-                crate::token_usage_window::show_token_usage(window, cx);
+            .on_click(cx.listener({
+                let workspace = self.workspace.clone();
+                move |_, _, window, cx| {
+                    if let Some(workspace) = workspace.upgrade() {
+                        workspace.update(cx, |workspace, cx| {
+                            crate::token_usage_page::open(workspace, window, cx);
+                        });
+                    }
+                }
             }));
 
         let max_content_width = AgentSettings::get_global(cx).max_content_width;

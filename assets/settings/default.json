@@ -1324,7 +1324,7 @@
       // Master switch for all of the passes below.
       "enabled": true,
       // How many of the most recent assistant turns keep their tool output intact.
-      "keep_recent_turns": 8,
+      "keep_recent_turns": 6,
       // Token budget for tool output in older turns. 0 replaces it with a
       // short placeholder instead.
       "old_tool_output_token_limit": 400,
@@ -1334,18 +1334,18 @@
       "dedupe_repeated_tool_results": true,
       // Replace images from older turns with a text placeholder.
       "drop_old_images": true,
-      // Remove reasoning/thinking from older turns. Off by default because some
-      // providers sign thinking blocks and expect them to be preserved.
-      "strip_old_thinking": false,
+      // Remove reasoning/thinking from older turns. Providers that sign thinking
+      // blocks still work because only the older history is rewritten.
+      "strip_old_thinking": true,
       // How many of the most recent turns keep their thinking when
       // strip_old_thinking is on. 0 reuses keep_recent_turns.
-      "strip_old_thinking_turns": 0,
+      "strip_old_thinking_turns": 8,
       // Best-effort cap on estimated input tokens per request (0 disables).
       // The oldest content is shrunk first.
       "total_request_token_budget": 0,
       // After how many newer tool-result turns the output of an ephemeral tool
       // is dropped entirely. 0 disables it.
-      "ephemeral_tool_turns": 3,
+      "ephemeral_tool_turns": 2,
       // Tools whose output is only useful for the next step or two.
       "ephemeral_tools": [
         "terminal",
@@ -1353,17 +1353,12 @@
         "find_path",
         "list_directory",
         "fetch",
-        "web_search",
         "diagnostics",
-        "find_references",
-        "go_to_definition",
-        "get_code_actions",
-        "list_agents_and_models",
       ],
       // After how many turns the arguments of an old tool call are replaced with
       // an empty object. This avoids replaying large write_file/edit_file
       // inputs. 0 disables it.
-      "old_tool_use_input_turns": 6,
+      "old_tool_use_input_turns": 2,
       // Keep only the newest read_file output per path.
       "keep_latest_read_per_path": true,
       // Per-tool overrides for a single tool result's token limit. A value of 0

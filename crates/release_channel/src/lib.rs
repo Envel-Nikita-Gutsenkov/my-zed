@@ -101,8 +101,13 @@ impl AppVersion {
         build_id: Option<&str>,
         commit_sha: Option<AppCommitSha>,
     ) -> Version {
+        // A runtime override wins so that a single build can be relabelled;
+        // otherwise fall back to the version baked in at compile time (the
+        // release workflow sets it from the git tag) and finally to Cargo.toml.
         let mut version: Version = if let Ok(from_env) = env::var("ZED_APP_VERSION") {
             from_env.parse().expect("invalid ZED_APP_VERSION")
+        } else if let Some(baked_in) = option_env!("ZED_APP_VERSION") {
+            baked_in.parse().expect("invalid ZED_APP_VERSION")
         } else {
             pkg_version.parse().expect("invalid version in Cargo.toml")
         };

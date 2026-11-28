@@ -178,6 +178,11 @@ pub struct AutoCompactSettings {
     pub threshold: AutoCompactThreshold,
 }
 
+/// Tools whose results are cheap to re-run, so their older output can be
+/// dropped from the request instead of being kept in context forever.
+const EPHEMERAL_TOOLS_BY_DEFAULT: &[&str] =
+    &["terminal", "grep", "find_path", "diagnostics", "fetch"];
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct TokenSavingsSettings {
     pub enabled: bool,
@@ -200,17 +205,20 @@ impl Default for TokenSavingsSettings {
     fn default() -> Self {
         Self {
             enabled: true,
-            keep_recent_turns: 8,
+            keep_recent_turns: 6,
             old_tool_output_token_limit: 400,
             strip_ansi: true,
             dedupe_repeated_tool_results: true,
             drop_old_images: true,
-            strip_old_thinking: false,
-            strip_old_thinking_turns: 0,
+            strip_old_thinking: true,
+            strip_old_thinking_turns: 8,
             total_request_token_budget: 0,
-            ephemeral_tool_turns: 0,
-            ephemeral_tools: Vec::new(),
-            old_tool_use_input_turns: 0,
+            ephemeral_tool_turns: 2,
+            ephemeral_tools: EPHEMERAL_TOOLS_BY_DEFAULT
+                .iter()
+                .map(|name| name.to_string())
+                .collect(),
+            old_tool_use_input_turns: 2,
             keep_latest_read_per_path: true,
             tool_output_token_limits: Default::default(),
         }

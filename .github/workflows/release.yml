@@ -91,6 +91,7 @@ jobs:
             arch: x86_64
     env:
       ZED_RELEASE_CHANNEL: ${{ needs.prepare.outputs.channel }}
+      ZED_APP_VERSION: ${{ needs.prepare.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -145,6 +146,7 @@ jobs:
     timeout-minutes: 300
     env:
       ZED_RELEASE_CHANNEL: ${{ needs.prepare.outputs.channel }}
+      ZED_APP_VERSION: ${{ needs.prepare.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
